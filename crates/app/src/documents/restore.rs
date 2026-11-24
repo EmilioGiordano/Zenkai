@@ -50,7 +50,7 @@ impl Documents {
             {
                 let id = self.take_id();
                 let link = session::link_of(file, id, space, recovery_directory);
-                self.after.push(Slot::Link(link));
+                self.after.push(Slot::Link(Box::new(link)));
                 if file.active {
                     active = Some(id);
                 }
@@ -131,11 +131,15 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{Installed, Intent, Provenance};
     use super::*;
-    use crate::entry::{Entry, LinkStatus};
+    use crate::csv_options::{CsvBinding, CsvOptions, Losses};
+    use crate::edit_log::EditLog;
+    use crate::entry::{CsvLoad, Entry, FileSeen, LinkStatus};
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
+    use zenkai_engine::FormatEdits;
     use zenkai_engine::Unsupported;
-    use zenkai_types::SheetId;
+    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
+    use zenkai_types::{ContentSpan, LoggedChange, SheetChange, SheetId};
 
     fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
         documents.members(space).map(Entry::name).collect()
@@ -150,6 +154,7 @@ mod tests {
             read_only: false,
             kind: Default::default(),
             mode: Default::default(),
+            csv: None,
             base: None,
             file_modified: None,
             pdf: Default::default(),
@@ -400,6 +405,219 @@ mod tests {
         assert_eq!(document.unsupported, [Unsupported::Charts]);
         assert!(document.may_lose_unseen_content());
         assert_eq!(document.path.as_deref(), Some(Path::new("a.xlsx")));
+    }
+
+    fn csv_binding() -> CsvBinding {
+        CsvBinding {
+            file_sheet: Some(1),
+            options: Some(read_options()),
+            accepted: Losses {
+                formatting: true,
+                ..Losses::default()
+            },
+            introduced: Losses {
+                number_formats: true,
+                ..Losses::default()
+            },
+            log: one_edit_logged(),
+            seen_edits: FormatEdits::default(),
+        }
+    }
+
+    fn one_edit_logged() -> EditLog {
+        let mut log = EditLog::default();
+        log.push(
+            LoggedChange {
+                sheet: 1,
+                change: SheetChange::Content(ContentSpan {
+                    row: 1,
+                    col: 1,
+                    rows: 1,
+                    cols: 1,
+                }),
+            },
+            0,
+        );
+        log
+    }
+
+    fn read_options() -> CsvOptions {
+        CsvOptions {
+            delimiter: Delimiter::Semicolon,
+            encoding: Encoding::Windows1252,
+            line_ending: LineEnding::Lf,
+            decimal_mark: DecimalMark::Comma,
+            date_order: DateOrder::DayFirst,
+        }
+    }
+
+    fn session_with(record: FileRecord) -> Session {
+        Session::new(
+            false,
+            vec![SpaceRecord {
+                name: "Q3".to_string(),
+                collapsed: false,
+                color: Default::default(),
+                appearance: Default::default(),
+                files: vec![record],
+            }],
+        )
+    }
+
+    #[test]
+    fn a_csv_document_comes_back_from_a_session_bound_to_its_file_with_its_options() {
+        let mut record = file(Some("prices.csv"), true);
+        record.csv = Some(csv_binding());
+        let mut documents = documents();
+        let id = documents.restore(&session_with(record), None).unwrap();
+        let Some(Entry::Link(link)) = documents.entry(id) else {
+            panic!("a restored workbook is a link until it loads");
+        };
+        assert_eq!(link.csv, Some(csv_binding()));
+        assert_eq!(link.name(), "prices.csv");
+
+        documents.install(loaded(id));
+        let document = documents.active().unwrap();
+        assert_eq!(document.path.as_deref(), Some(Path::new("prices.csv")));
+        assert_eq!(document.csv, Some(csv_binding()));
+        assert_eq!(document.untitled(), 0);
+
+        let snapshot = documents.snapshot(false, SpaceAppearance::default(), |_| None);
+        let again = &snapshot.spaces[0].files[0];
+        assert_eq!(again.csv, Some(csv_binding()));
+    }
+
+    #[test]
+    fn a_workbook_read_from_its_csv_takes_the_options_it_was_read_with() {
+        let mut documents = documents();
+        let id = documents
+            .restore(&session_with(file(Some("prices.csv"), true)), None)
+            .unwrap();
+        let mut read = loaded(id);
+        read.csv = Some(CsvLoad {
+            options: read_options(),
+            seen: FileSeen::unknown(),
+            sheet: Some(1),
+        });
+        documents.install(read);
+        let document = documents.active().unwrap();
+        assert_eq!(
+            document.csv,
+            Some(CsvBinding::new(read_options()).with_sheet(Some(1)))
+        );
+        assert!(document.file_guard().is_some());
+    }
+
+    fn rebuilt_binding(provenance: Provenance) -> CsvBinding {
+        let mut documents = documents();
+        let mut record = file(Some("prices.csv"), true);
+        let mut moved = csv_binding();
+        moved.introduced.moved_cells = true;
+        record.csv = Some(moved);
+        let id = documents.restore(&session_with(record), None).unwrap();
+        let mut read = loaded(id);
+        read.provenance = provenance;
+        read.csv = Some(CsvLoad {
+            options: read_options(),
+            seen: FileSeen::unknown(),
+            sheet: Some(1),
+        });
+        documents.install(read);
+        documents.active().unwrap().csv.clone().unwrap()
+    }
+
+    #[test]
+    fn a_workbook_rebuilt_from_its_csv_has_the_rows_of_the_file_again() {
+        let binding = rebuilt_binding(Provenance::File);
+        assert!(binding.log.is_empty());
+        assert_eq!(binding.introduced, Losses::default());
+        assert_eq!(binding.accepted, csv_binding().accepted);
+    }
+
+    #[test]
+    fn a_workbook_rebuilt_from_a_dump_keeps_its_log_and_one_from_a_recovery_copy_distrusts_it() {
+        let dump = rebuilt_binding(Provenance::Dump);
+        assert_eq!(dump.log.changes().count(), 1);
+        assert!(!dump.log.has_lost());
+        assert!(dump.introduced.moved_cells);
+
+        let recovered = rebuilt_binding(Provenance::Recovery);
+        assert_eq!(recovered.log.changes().count(), 1);
+        assert!(recovered.log.has_lost());
+    }
+
+    #[test]
+    fn a_copy_woken_with_no_stored_binding_does_not_get_a_trusted_empty_log() {
+        for provenance in [Provenance::Recovery, Provenance::Dump] {
+            let mut documents = documents();
+            let id = documents
+                .restore(&session_with(file(Some("prices.csv"), true)), None)
+                .unwrap();
+            let mut read = loaded(id);
+            read.provenance = provenance;
+            read.csv = Some(CsvLoad {
+                options: read_options(),
+                seen: FileSeen::unknown(),
+                sheet: None,
+            });
+            documents.install(read);
+            let binding = documents.active().unwrap().csv.clone().unwrap();
+            assert!(binding.log.has_lost());
+        }
+    }
+
+    #[test]
+    fn a_file_restored_from_the_session_saves_without_a_prompt_and_without_a_byte_changed() {
+        use crate::csv_io;
+        use crate::csv_save::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
+        use crate::document::ChangedFile;
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ventas.csv");
+        std::fs::write(&path, crate::csv_save::tests::SALES).unwrap();
+        let first = csv_io::load_csv(&path, None).unwrap();
+        let options = first.csv.as_ref().unwrap().options;
+        let stored = serde_json::to_string(&CsvBinding::new(options)).unwrap();
+        let mut record = file(Some(path.to_str().unwrap()), true);
+        record.csv = Some(serde_json::from_str(&stored).unwrap());
+
+        let mut documents = documents();
+        let id = documents.restore(&session_with(record), None).unwrap();
+        let read = csv_io::load_csv(&path, Some(options)).unwrap();
+        let mut woken = loaded(id);
+        woken.workbook = read.workbook;
+        woken.csv = read.csv;
+        documents.install(woken);
+        let document = documents.active().unwrap();
+        let binding = document.csv.clone().unwrap();
+        assert!(!binding.introduced.any());
+        let asked = CsvSaveRequest {
+            path: path.clone(),
+            binding,
+            sheets: 1,
+            sheet: SheetId(0),
+            changed: ChangedFile::Ask,
+            large: LargeWrite::Ask,
+            guard: document.file_guard(),
+        };
+        let shared = document.shared_workbook();
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), crate::csv_save::tests::SALES);
+    }
+
+    #[test]
+    fn a_document_with_a_delimited_path_is_always_a_csv_with_options_still_to_find() {
+        let mut documents = documents();
+        let id = open_file(&mut documents, "export.tsv");
+        let document = documents.get(id).unwrap();
+        assert_eq!(
+            document.csv,
+            Some(CsvBinding::unresolved().with_sheet(Some(1)))
+        );
+        let id = open_file(&mut documents, "book.xlsx");
+        assert_eq!(documents.get(id).unwrap().csv, None);
     }
 
     fn restored_from_recovery(modified: Option<std::time::SystemTime>) -> Documents {

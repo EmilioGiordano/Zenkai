@@ -142,6 +142,7 @@ mod tests {
             origin: None,
             kind: Default::default(),
             mode: Default::default(),
+            csv: None,
             base: None,
             pdf: Default::default(),
             text_zoom: Default::default(),

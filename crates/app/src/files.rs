@@ -1,23 +1,22 @@
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use zenkai_agent::preferences::XlsxReaderChoice;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_engine::{
-    Engine, EngineError, ShownCells, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
-    run_with_engine_stack, write_atomic_streaming,
+    Engine, EngineError, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
+    run_with_engine_stack,
 };
-use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv};
+use zenkai_formats::Delimiter;
 use zenkai_i18n::t;
 use zenkai_pdf_host::process::host_next_to_exe;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 use zenkai_values_host::client::{HOST_FILE, ReadError, ValuesClient};
 use zenkai_values_host::wire::FailureKind;
 
-use crate::document::read_shared;
+use crate::entry::CsvLoad;
 use crate::text_document::DocumentKind;
 
 pub const SPREADSHEET_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
@@ -145,22 +144,17 @@ pub fn is_delimited_text(path: &Path) -> bool {
     matches!(extension(path).as_deref(), Some("csv" | "tsv" | "txt"))
 }
 
-pub fn read_csv(path: &Path) -> Result<(Vec<u8>, ParsedCsv), String> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?;
-    let hint = (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab);
-    let parsed = parse_csv(&bytes, hint).map_err(|e| e.to_string())?;
-    Ok((bytes, parsed))
+// Only csv and tsv open as themselves; a txt is imported into a new workbook.
+pub fn opens_as_itself(path: &Path) -> bool {
+    matches!(extension(path).as_deref(), Some("csv" | "tsv"))
 }
 
-pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
-    run_with_engine_stack(move || {
-        let mut workbook = Workbook::new_empty()?;
-        workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
-        workbook.warm_used_areas();
-        Ok(workbook)
-    })
-    .map_err(|e| e.to_string())
+pub fn tsv_delimiter(path: &Path) -> Option<Delimiter> {
+    (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab)
+}
+
+pub fn export_delimiter(path: &Path) -> Delimiter {
+    tsv_delimiter(path).unwrap_or(Delimiter::Comma)
 }
 
 pub struct FileLoad {
@@ -169,6 +163,7 @@ pub struct FileLoad {
     pub read_only: bool,
     pub origin: FileOrigin,
     pub reader_fallback: Option<String>,
+    pub csv: Option<CsvLoad>,
 }
 
 // ZENKAI_XLSX_READER=fast, shadow or standard overrides the setting, for testing.
@@ -184,6 +179,7 @@ pub fn xlsx_reader(choice: XlsxReaderChoice) -> XlsxReader {
     }
 }
 
+#[derive(Debug)]
 pub enum LoadFailure {
     Missing,
     Engine(EngineError),
@@ -233,6 +229,7 @@ fn load_any(
             read_only: false,
             origin: file_origin(path),
             reader_fallback: opened.fallback,
+            csv: None,
         }),
         Err(EngineError::InvalidFile(_)) if cancel.load(Ordering::Relaxed) => {
             Err(LoadFailure::Engine(EngineError::Cancelled))
@@ -244,6 +241,7 @@ fn load_any(
                 read_only: true,
                 origin: file_origin(path),
                 reader_fallback: None,
+                csv: None,
             }),
             Err(_) if cancel.load(Ordering::Relaxed) => {
                 Err(LoadFailure::Engine(EngineError::Cancelled))
@@ -313,85 +311,18 @@ pub fn open_values(path: &Path, cancel: &AtomicBool) -> Result<Workbook, String>
     .map_err(|e| e.to_string())
 }
 
-// The read lock is held only while the shown cells are gathered; the write can take far
-// longer. Memory follows the cells, never the area up to the sheet's end.
-pub fn gather_export(shared: &RwLock<Workbook>, sheet: SheetId) -> Result<ShownCells, EngineError> {
-    read_shared(shared).shown_cells(sheet)
-}
-
-pub fn write_csv_file(
-    path: &Path,
-    shown: &ShownCells,
-    cancel: &AtomicBool,
-) -> Result<(), EngineError> {
-    let delimiter = if extension(path).as_deref() == Some("tsv") {
-        Delimiter::Tab
-    } else {
-        Delimiter::Comma
-    };
-    write_atomic_streaming(path, |out| {
-        write_shown_rows(out, shown, delimiter, cancel).map_err(|error| match error {
-            ExportStop::Cancelled => EngineError::Cancelled,
-            ExportStop::Csv(CsvError::Write(source)) => EngineError::Write {
-                path: path.to_path_buf(),
-                source,
-            },
-            ExportStop::Csv(other) => EngineError::Rejected(other.to_string()),
-        })
-    })
-}
-
-enum ExportStop {
-    Cancelled,
-    Csv(CsvError),
-}
-
-impl From<CsvError> for ExportStop {
-    fn from(error: CsvError) -> Self {
-        ExportStop::Csv(error)
-    }
-}
-
-// Every row up to the sheet's end has as many fields as the sheet has columns, as when
-// the whole rectangle was written; gaps are written without building a string each.
-fn write_shown_rows(
-    out: &mut dyn Write,
-    shown: &ShownCells,
-    delimiter: Delimiter,
-    cancel: &AtomicBool,
-) -> Result<(), ExportStop> {
-    let width = usize::from(shown.end.col.get()) + 1;
-    let mut writer = CsvWriter::new(out, delimiter)?;
-    let mut cells = shown.cells.iter().peekable();
-    for row in 0..=shown.end.row.get() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ExportStop::Cancelled);
-        }
-        let mut next_col = 0;
-        while let Some((pos, text)) = cells.next_if(|(pos, _)| pos.row.get() == row) {
-            let col = usize::from(pos.col.get());
-            writer.write_empty_fields(col.saturating_sub(next_col))?;
-            writer.write_field(text)?;
-            next_col = col + 1;
-        }
-        writer.write_empty_fields(width.saturating_sub(next_col))?;
-        writer.end_row()?;
-    }
-    writer.finish()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_types::{ColIdx, Contents, RowIdx};
 
-    fn number_at(workbook: &Workbook, col: u16) -> Option<f64> {
-        let pos = CellPos::new(RowIdx::clamped(0), ColIdx::clamped(i64::from(col)));
-        match workbook.contents(SheetId(0)).unwrap()(pos) {
-            Contents::Number(n) => Some(n),
-            _ => None,
+    #[test]
+    fn only_csv_and_tsv_open_as_themselves_and_a_txt_is_still_imported() {
+        for name in ["a.csv", "a.TSV"] {
+            assert!(opens_as_itself(Path::new(name)), "{name}");
         }
+        assert!(!opens_as_itself(Path::new("a.txt")));
+        assert!(is_delimited_text(Path::new("a.txt")));
+        assert!(is_openable(Path::new("a.txt")));
     }
 
     #[test]
@@ -429,173 +360,6 @@ mod tests {
         assert_eq!(copy_stem("Report"), "Report (Zenkai)");
         assert_eq!(copy_stem("Report (Zenkai)"), "Report (Zenkai)");
         assert_eq!(copy_stem("Report (Zenkai) v2"), "Report (Zenkai) v2");
-    }
-
-    #[test]
-    fn csv_import_then_export_keeps_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("in.csv");
-        std::fs::write(&source, "name;qty\nAna;3\nLuis;4\n").unwrap();
-        let (_, parsed) = read_csv(&source).unwrap();
-        assert_eq!(parsed.delimiter, Delimiter::Semicolon);
-        let workbook = workbook_from_rows(parsed.rows).unwrap();
-        let target = dir.path().join("out.csv");
-        let shown = workbook.shown_cells(SheetId(0)).unwrap();
-        write_csv_file(&target, &shown, &AtomicBool::new(false)).unwrap();
-        let written = std::fs::read(&target).unwrap();
-        assert_eq!(&written[3..], b"name,qty\r\nAna,3\r\nLuis,4\r\n");
-    }
-
-    fn at(row: i64, col: i64) -> CellPos {
-        CellPos::new(RowIdx::clamped(row), ColIdx::clamped(col))
-    }
-
-    fn sheet_with(cells: &[(CellPos, &str)]) -> Workbook {
-        let mut workbook = Workbook::new_empty().unwrap();
-        for (pos, text) in cells {
-            workbook.set_input(SheetId(0), *pos, text).unwrap();
-        }
-        workbook
-    }
-
-    // The export before it streamed: one string per cell of the used rectangle.
-    fn whole_rectangle_export(workbook: &Workbook, delimiter: Delimiter) -> Vec<u8> {
-        let end = workbook.used_end(SheetId(0));
-        let rows: Vec<Vec<String>> = (0..=i64::from(end.row.get()))
-            .map(|row| {
-                (0..=i64::from(end.col.get()))
-                    .map(|col| workbook.cell(SheetId(0), at(row, col)).text)
-                    .collect()
-            })
-            .collect();
-        zenkai_formats::write_csv(&rows, delimiter).unwrap()
-    }
-
-    fn exported(workbook: Workbook, name: &str) -> Vec<u8> {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join(name);
-        let shown = gather_export(&RwLock::new(workbook), SheetId(0)).unwrap();
-        write_csv_file(&target, &shown, &AtomicBool::new(false)).unwrap();
-        std::fs::read(&target).unwrap()
-    }
-
-    #[test]
-    fn streamed_export_writes_the_bytes_of_the_whole_rectangle() {
-        let sheets: Vec<(&str, Vec<(CellPos, &str)>)> = vec![
-            (
-                "gaps.csv",
-                vec![
-                    (at(0, 0), "name"),
-                    (at(0, 3), "a,b"),
-                    (at(1, 1), "say \"hi\""),
-                    (at(3, 0), "@user"),
-                    (at(3, 2), "=SEQUENCE(3)"),
-                    (at(4, 4), "-x"),
-                ],
-            ),
-            (
-                "one column.csv",
-                vec![(at(0, 0), "top"), (at(3, 0), "bottom")],
-            ),
-            ("tabs.tsv", vec![(at(0, 1), "a\tb"), (at(2, 0), "=1/0")]),
-            ("empty.csv", vec![]),
-        ];
-        for (name, cells) in sheets {
-            let workbook = sheet_with(&cells);
-            let delimiter = if name.ends_with(".tsv") {
-                Delimiter::Tab
-            } else {
-                Delimiter::Comma
-            };
-            let expected = whole_rectangle_export(&workbook, delimiter);
-            assert_eq!(exported(workbook, name), expected, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_cancelled_export_removes_its_temp_and_keeps_the_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("out.csv");
-        std::fs::write(&target, "old contents").unwrap();
-        let workbook = sheet_with(&[(at(0, 0), "a"), (at(5, 3), "b")]);
-        let shown = gather_export(&RwLock::new(workbook), SheetId(0)).unwrap();
-        let result = write_csv_file(&target, &shown, &AtomicBool::new(true));
-        assert!(matches!(result, Err(EngineError::Cancelled)));
-        assert_eq!(std::fs::read(&target).unwrap(), b"old contents");
-        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
-        assert_eq!(names.len(), 1);
-    }
-
-    #[test]
-    fn a_cancelled_export_to_a_new_name_leaves_nothing_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("new.csv");
-        let workbook = sheet_with(&[(at(0, 0), "a")]);
-        let shown = gather_export(&RwLock::new(workbook), SheetId(0)).unwrap();
-        let result = write_csv_file(&target, &shown, &AtomicBool::new(true));
-        assert!(matches!(result, Err(EngineError::Cancelled)));
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn spills_gaps_and_empty_rows_export_as_the_sheet_shows_them() {
-        let workbook = sheet_with(&[(at(0, 0), "=SEQUENCE(3)"), (at(1, 2), "x")]);
-        assert_eq!(
-            &exported(workbook, "spill.csv")[3..],
-            b"1,,\r\n2,,x\r\n3,,\r\n"
-        );
-        let workbook = sheet_with(&[(at(0, 0), "top"), (at(2, 0), "bottom")]);
-        assert_eq!(
-            &exported(workbook, "column.csv")[3..],
-            b"top\r\n\"\"\r\nbottom\r\n"
-        );
-    }
-
-    #[test]
-    fn a_sheet_ending_at_the_last_row_exports_every_row_quickly() {
-        let last_row = i64::from(zenkai_types::MAX_ROWS - 1);
-        let workbook = sheet_with(&[(at(0, 0), "first"), (at(last_row, 1), "last")]);
-        let started = Instant::now();
-        let bytes = exported(workbook, "tall.csv");
-        assert!(started.elapsed() < std::time::Duration::from_secs(120));
-        let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
-        assert_eq!(lines, zenkai_types::MAX_ROWS as usize);
-        assert!(bytes[3..].starts_with(b"first,\r\n,\r\n"));
-        assert!(bytes.ends_with(b",\r\n,last\r\n"));
-    }
-
-    #[test]
-    fn a_sheet_reaching_the_last_column_exports_full_width_rows() {
-        let last_col = i64::from(zenkai_types::MAX_COLS - 1);
-        let workbook = sheet_with(&[(at(0, 0), "first"), (at(49, last_col), "last")]);
-        let bytes = exported(workbook, "wide.csv");
-        let text = String::from_utf8(bytes[3..].to_vec()).unwrap();
-        let lines: Vec<&str> = text.split_terminator("\r\n").collect();
-        let gap = ",".repeat(usize::from(zenkai_types::MAX_COLS) - 1);
-        assert_eq!(lines.len(), 50);
-        assert_eq!(lines[0], format!("first{gap}"));
-        assert_eq!(lines[1], gap);
-        assert_eq!(lines[49], format!("{gap}last"));
-    }
-
-    #[test]
-    fn decimal_comma_fields_import_as_numbers() {
-        let mut rows = vec![vec!["1.234,5".to_string(), "=A1*2".to_string()]];
-        zenkai_formats::normalize_decimal_comma(&mut rows);
-        let workbook = workbook_from_rows(rows).unwrap();
-        let doubled = number_at(&workbook, 1);
-        assert_eq!(doubled, Some(2469.0));
-    }
-
-    #[test]
-    fn day_first_dates_import_as_the_right_day() {
-        let mut rows = vec![vec!["08/10/2026".to_string(), "25/10/2026".to_string()]];
-        zenkai_formats::normalize_day_first(&mut rows);
-        let workbook = workbook_from_rows(rows).unwrap();
-        let serial = |col| number_at(&workbook, col);
-        // 8 October 2026 and 25 October 2026 as Excel serials.
-        assert_eq!(serial(0), Some(46303.0));
-        assert_eq!(serial(1), Some(46320.0));
     }
 
     #[test]

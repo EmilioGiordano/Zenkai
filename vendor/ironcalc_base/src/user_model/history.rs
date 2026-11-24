@@ -349,6 +349,9 @@ pub struct StepCells {
     /// Areas whose cells the step writes, clears or restyles. Clearing a dynamic array
     /// anchor also clears the cells it spills into, which are not listed.
     pub areas: Vec<Area>,
+    /// The areas among those whose contents the step writes or clears, with the restyled
+    /// ones left out.
+    pub content: Vec<Area>,
     /// Sheets whose rows or columns the step inserts, deletes or moves, which can move
     /// any of their cells. Row and column sizes, visibility and styles, panes, grid
     /// lines, sheet colour and state and conditional formatting add, move or remove no
@@ -374,8 +377,11 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
         match diff {
             Diff::SetCellValue {
                 sheet, row, column, ..
+            } => {
+                cells.areas.push(cell_area(*sheet, *row, *column, 1, 1));
+                cells.content.push(cell_area(*sheet, *row, *column, 1, 1));
             }
-            | Diff::CellClearFormatting {
+            Diff::CellClearFormatting {
                 sheet, row, column, ..
             }
             | Diff::SetCellStyle {
@@ -400,14 +406,6 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
                 height,
                 ..
             }
-            | Diff::FillStyle {
-                sheet,
-                row,
-                column,
-                width,
-                height,
-                ..
-            }
             | Diff::RangeClearContents {
                 sheet,
                 row,
@@ -417,6 +415,21 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
                 ..
             }
             | Diff::RangeClearAll {
+                sheet,
+                row,
+                column,
+                width,
+                height,
+                ..
+            } => {
+                cells
+                    .areas
+                    .push(cell_area(*sheet, *row, *column, *width, *height));
+                cells
+                    .content
+                    .push(cell_area(*sheet, *row, *column, *width, *height));
+            }
+            Diff::FillStyle {
                 sheet,
                 row,
                 column,

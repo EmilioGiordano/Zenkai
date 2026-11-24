@@ -42,10 +42,11 @@ pub use file::{
     write_atomic,
 };
 pub use hibernation::{Kept, MAX_DUMP_BYTES};
+pub use model::FormatEdits;
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use saved::Stamp;
-pub use shown_cells::ShownCells;
+pub use shown_cells::{FileCell, FileCells, ShownCells};
 pub use streamed_write::write_atomic_streaming;
 pub use workbook::{Copied, Engine, Workbook, format_preview};
 pub use xlsx_read::{

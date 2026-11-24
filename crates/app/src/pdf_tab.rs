@@ -41,6 +41,7 @@ impl PdfTab {
             origin: None,
             kind: DocumentKind::Pdf,
             mode: ViewMode::default(),
+            csv: None,
             base: None,
             pdf: self.position,
             text_zoom: Default::default(),

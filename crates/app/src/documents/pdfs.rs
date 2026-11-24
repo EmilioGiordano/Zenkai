@@ -94,6 +94,7 @@ mod tests {
                     read_only: true,
                     kind: DocumentKind::Pdf,
                     mode: Default::default(),
+                    csv: None,
                     base: None,
                     file_modified: None,
                     pdf: position,

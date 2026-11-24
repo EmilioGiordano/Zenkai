@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -6,7 +6,9 @@ use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::Cell;
 use ironcalc::base::{StepCells, UserModel};
-use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
+use zenkai_types::{
+    CellPos, ColIdx, ContentSpan, LoggedChange, Range, RowIdx, SheetChange, SheetId,
+};
 
 use crate::workbook::{col_i32, row_i32};
 
@@ -17,6 +19,51 @@ use crate::workbook::{col_i32, row_i32};
 pub struct CachedModel {
     model: UserModel<'static>,
     extents: Mutex<HashMap<SheetId, Extent>>,
+    line_styles: Mutex<HashMap<SheetId, bool>>,
+    format_edits: FormatEdits,
+    log: ChangeLog,
+}
+
+// Changes are numbered from one and the oldest are dropped first.
+const MAX_LOGGED_CHANGES: usize = 1024;
+
+#[derive(Default)]
+struct ChangeLog {
+    kept: VecDeque<LoggedChange>,
+    last: u64,
+}
+
+impl ChangeLog {
+    fn push(&mut self, change: LoggedChange) {
+        self.last += 1;
+        self.kept.push_back(change);
+        if self.kept.len() > MAX_LOGGED_CHANGES {
+            self.kept.pop_front();
+        }
+    }
+
+    fn since(&self, seen: u64) -> Option<Vec<LoggedChange>> {
+        if seen > self.last {
+            return None;
+        }
+        let oldest = self.last + 1 - u64::try_from(self.kept.len()).ok()?;
+        if seen + 1 < oldest {
+            return None;
+        }
+        let skip = usize::try_from(seen + 1 - oldest).unwrap_or(usize::MAX);
+        Some(self.kept.iter().skip(skip).copied().collect())
+    }
+}
+
+// Commands that may change what a CSV cannot hold, counted since the workbook was built or
+// woken. Undo takes none back, so a count above zero means something may have changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FormatEdits {
+    pub numbers: u64,
+    pub other: u64,
+    // Cells rearranged in a way the changes logged do not describe.
+    pub moved: u64,
+    pub seq: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -138,7 +185,87 @@ impl CachedModel {
         CachedModel {
             model,
             extents: Mutex::new(HashMap::new()),
+            line_styles: Mutex::new(HashMap::new()),
+            format_edits: FormatEdits::default(),
+            log: ChangeLog::default(),
         }
+    }
+
+    pub fn format_edits(&self) -> FormatEdits {
+        FormatEdits {
+            seq: self.log.last,
+            ..self.format_edits
+        }
+    }
+
+    // Called once a workbook is built with commands that log: only what comes after matters.
+    pub fn forget_changes(&mut self) {
+        self.format_edits = FormatEdits::default();
+        self.log = ChangeLog::default();
+    }
+
+    pub(crate) fn record_change(&mut self, sheet: u32, change: SheetChange) {
+        self.log.push(LoggedChange { sheet, change });
+    }
+
+    pub(crate) fn record_unknown(&mut self) {
+        self.record_change(0, SheetChange::Unknown);
+        self.format_edits.moved += 1;
+    }
+
+    pub fn changes_since(&self, seen: u64) -> Option<Vec<LoggedChange>> {
+        self.log.since(seen)
+    }
+
+    pub(crate) fn sheet_key(&self, index: u32) -> Option<u32> {
+        let worksheets = &self.model.get_model().workbook.worksheets;
+        worksheets
+            .get(usize::try_from(index).ok()?)
+            .map(|ws| ws.sheet_id)
+    }
+
+    // Whether any row or column of the sheet has a style of its own, which copying cells
+    // carries along; read once until a style changes.
+    pub(crate) fn sheet_has_line_styles(&self, sheet: SheetId) -> bool {
+        let mut known = self
+            .line_styles
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *known.entry(sheet).or_insert_with(|| {
+            match self.model.get_model().workbook.worksheet(sheet.0) {
+                Ok(ws) => {
+                    ws.rows.iter().any(|row| row.custom_format && row.s != 0)
+                        || ws.cols.iter().any(|col| col.style.is_some_and(|s| s != 0))
+                }
+                Err(_) => true,
+            }
+        })
+    }
+
+    pub(crate) fn count_number_format_edit(&mut self) {
+        self.format_edits.numbers += 1;
+    }
+
+    pub(crate) fn count_style_edit(&mut self) {
+        self.format_edits.other += 1;
+        self.line_styles
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    pub(crate) fn count_moved_edit(&mut self) {
+        self.format_edits.moved += 1;
+    }
+
+    pub(crate) fn set_format_edits(&mut self, edits: FormatEdits) {
+        self.format_edits = edits;
+    }
+
+    // Commands that carry the style of cells along with their content.
+    pub(crate) fn count_copy_edit(&mut self) {
+        self.format_edits.numbers += 1;
+        self.format_edits.other += 1;
     }
 
     // The cache only holds derived values, so a lock poisoned by a panicked reader
@@ -211,12 +338,33 @@ impl CachedModel {
         let evaluations = self.full_evaluations();
         let result = run(&mut self.model, take);
         match (reach, &result) {
-            (Some(StepCells { areas, sheets }), Ok(_)) => {
+            (
+                Some(StepCells {
+                    areas,
+                    sheets,
+                    content,
+                }),
+                Ok(_),
+            ) => {
                 let changed: Vec<(SheetId, Range)> = areas.iter().filter_map(step_area).collect();
-                let rebuilt: Vec<SheetId> = sheets.into_iter().map(SheetId).collect();
+                let rebuilt: Vec<SheetId> = sheets.iter().copied().map(SheetId).collect();
                 self.keep_extents(&changed, CellChange::AddOrRemove, &rebuilt, evaluations);
+                for (sheet, range) in content.iter().filter_map(step_area) {
+                    match self.sheet_key(sheet.0) {
+                        Some(key) => {
+                            self.record_change(key, SheetChange::Content(ContentSpan::of(range)))
+                        }
+                        None => self.record_unknown(),
+                    }
+                }
+                if !sheets.is_empty() {
+                    self.record_unknown();
+                }
             }
-            _ => self.cache_mut().clear(),
+            _ => {
+                self.cache_mut().clear();
+                self.record_unknown();
+            }
         }
         result
     }
@@ -328,6 +476,10 @@ impl Deref for CachedModel {
 impl DerefMut for CachedModel {
     fn deref_mut(&mut self) -> &mut UserModel<'static> {
         self.cache_mut().clear();
+        self.line_styles
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         &mut self.model
     }
 }

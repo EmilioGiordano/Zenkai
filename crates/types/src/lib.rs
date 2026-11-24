@@ -326,6 +326,71 @@ pub struct SheetInfo {
     pub visibility: SheetVisibility,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineAxis {
+    Row,
+    Column,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineChange {
+    Insert,
+    Delete,
+}
+
+// Rows or columns inserted or deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineOp {
+    pub axis: LineAxis,
+    pub change: LineChange,
+    pub at: u32,
+    pub count: u32,
+}
+
+// A block of cells whose contents a command wrote or cleared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentSpan {
+    pub row: u32,
+    pub col: u32,
+    pub rows: u32,
+    pub cols: u32,
+}
+
+impl ContentSpan {
+    pub fn of(range: Range) -> ContentSpan {
+        ContentSpan {
+            row: range.start.row.get(),
+            col: u32::from(range.start.col.get()),
+            rows: range.rows(),
+            cols: u32::from(range.cols()),
+        }
+    }
+
+    pub fn contains(self, row: u32, col: u32) -> bool {
+        row >= self.row
+            && col >= self.col
+            && u64::from(row) < u64::from(self.row) + u64::from(self.rows)
+            && u64::from(col) < u64::from(self.col) + u64::from(self.cols)
+    }
+}
+
+// What a command did to a sheet that a file read from it could not know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SheetChange {
+    Lines(LineOp),
+    Content(ContentSpan),
+    // Something happened that the log cannot describe, to any sheet.
+    Unknown,
+}
+
+// A change with the stable identity of its sheet, which the sheet's place in the workbook does
+// not change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoggedChange {
+    pub sheet: u32,
+    pub change: SheetChange,
+}
+
 // Excel's quick border buttons; borders are thin and automatic colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BorderPreset {

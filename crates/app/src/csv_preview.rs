@@ -7,12 +7,10 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_formats::{
-    DateOrder, Delimiter, ParsedCsv, detect_date_order, detect_decimal_comma, normalize_day_first,
-    normalize_decimal_comma,
-};
+use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, apply};
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
+use crate::entry::FileSeen;
 use crate::interface_scale::rem_px;
 
 const PREVIEW_ROWS: usize = 12;
@@ -38,48 +36,50 @@ pub struct CsvPreview {
     pub bytes: Arc<Vec<u8>>,
     pub parsed: ParsedCsv,
     pub guess: Guess,
+    // The file as it was when read, for the document the import makes of it.
+    pub seen: FileSeen,
+    // What the table shows, built once and again when the reading changes, not every frame.
+    pub shown: Vec<Vec<String>>,
 }
 
-/// How numbers and dates are read on import; guessed from the file, switchable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Guess {
-    pub decimal_comma: bool,
-    pub date_order: DateOrder,
-    pub columns: usize,
-}
-
-/// Rewrites day-first dates and decimal-comma numbers as the import will. Dates go first:
-/// a day-first date written with dots must not be read as a grouped number.
-pub fn apply(guess: Guess, rows: &mut [Vec<String>]) {
-    if guess.date_order == DateOrder::DayFirst {
-        normalize_day_first(rows);
+impl CsvPreview {
+    pub fn new(
+        path: PathBuf,
+        bytes: Arc<Vec<u8>>,
+        parsed: ParsedCsv,
+        guess: Guess,
+        seen: FileSeen,
+    ) -> CsvPreview {
+        let mut preview = CsvPreview {
+            path,
+            bytes,
+            parsed,
+            guess,
+            seen,
+            shown: Vec::new(),
+        };
+        preview.rebuild();
+        preview
     }
-    if guess.decimal_comma {
-        normalize_decimal_comma(rows);
-    }
-}
 
-/// Scans every row, so it runs on a background thread.
-pub fn guess(parsed: &ParsedCsv) -> Guess {
-    let decimal_comma = parsed.delimiter != Delimiter::Comma && detect_decimal_comma(&parsed.rows);
-    // Dates that read both ways follow the number style: a decimal comma means a locale
-    // that writes the day first.
-    let date_order = detect_date_order(&parsed.rows).unwrap_or(if decimal_comma {
-        DateOrder::DayFirst
-    } else {
-        DateOrder::MonthFirst
-    });
-    Guess {
-        decimal_comma,
-        date_order,
-        columns: parsed.rows.iter().map(Vec::len).max().unwrap_or(0),
+    // The table shows the values as they will be imported.
+    pub fn rebuild(&mut self) {
+        let mut shown: Vec<Vec<String>> = self
+            .parsed
+            .rows
+            .iter()
+            .take(PREVIEW_ROWS)
+            .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
+            .collect();
+        apply(self.guess.decimal_mark, self.guess.date_order, &mut shown);
+        self.shown = shown;
     }
 }
 
 #[derive(Clone, Copy)]
 pub enum PreviewEvent {
     Delimiter(Delimiter),
-    DecimalComma(bool),
+    DecimalMark(DecimalMark),
     DateOrder(DateOrder),
 }
 
@@ -95,21 +95,12 @@ pub fn render(
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let total_cols = preview.guess.columns;
-    // The table shows the values as they will be imported.
-    let mut shown: Vec<Vec<String>> = preview
-        .parsed
-        .rows
-        .iter()
-        .take(PREVIEW_ROWS)
-        .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
-        .collect();
-    apply(preview.guess, &mut shown);
     let table = v_flex()
         .border_1()
         .border_color(theme.border)
         .rounded_md()
         .overflow_hidden()
-        .children(shown.into_iter().enumerate().map(|(index, row)| {
+        .children(preview.shown.iter().enumerate().map(|(index, row)| {
             h_flex()
                 .when(index % 2 == 1, |line| line.bg(theme.table_even))
                 .children((0..total_cols.min(PREVIEW_COLS)).map(|col| {
@@ -145,13 +136,14 @@ pub fn render(
             PreviewEvent::Delimiter(delimiter),
         )
     });
-    let decimal_buttons = [(false, "1.5"), (true, "1,5")].map(|(comma, label)| {
-        choice(
-            label,
-            preview.guess.decimal_comma == comma,
-            PreviewEvent::DecimalComma(comma),
-        )
-    });
+    let decimal_buttons =
+        [(DecimalMark::Dot, "1.5"), (DecimalMark::Comma, "1,5")].map(|(mark, label)| {
+            choice(
+                label,
+                preview.guess.decimal_mark == mark,
+                PreviewEvent::DecimalMark(mark),
+            )
+        });
     let date_buttons = [
         (DateOrder::DayFirst, t!("csv.date_day_first")),
         (DateOrder::MonthFirst, t!("csv.date_month_first")),

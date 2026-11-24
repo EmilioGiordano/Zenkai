@@ -22,15 +22,161 @@ pub fn detect_decimal_comma(rows: &[Vec<String>]) -> bool {
 pub fn normalize_decimal_comma(rows: &mut [Vec<String>]) -> usize {
     let mut changed = 0;
     for field in rows.iter_mut().flatten() {
-        if matches!(
-            shape(field),
-            Some(Shape::DecimalComma | Shape::Grouped | Shape::Ambiguous)
-        ) {
-            *field = field.replace('.', "").replace(',', ".");
+        if let Some(rewritten) = decimal_comma_field(field) {
+            *field = rewritten;
             changed += 1;
         }
     }
     changed
+}
+
+// What `normalize_decimal_comma` makes of one field, so a save can tell what the import
+// turned a field of the file into.
+pub fn decimal_comma_field(field: &str) -> Option<String> {
+    matches!(
+        shape(field),
+        Some(Shape::DecimalComma | Shape::Grouped | Shape::Ambiguous)
+    )
+    .then(|| field.replace('.', "").replace(',', "."))
+}
+
+const CURRENCIES: [char; 2] = ['$', '€'];
+
+// The number a text stands for exactly as the engine's import parses it, and no other way: `$`
+// and `€` are the currencies it knows, a percent sign goes last, and grouping commas need
+// groups of three. A text it keeps as text is never taken for a number here.
+pub fn number_value(text: &str) -> Option<f64> {
+    let value = text.trim();
+    if let Some(body) = value.strip_suffix('%') {
+        return plain_number(body.trim()).map(|(number, _)| number / 100.0);
+    }
+    for currency in CURRENCIES {
+        if let Some(body) = value
+            .strip_prefix('-')
+            .and_then(|rest| rest.strip_prefix(currency))
+        {
+            // The engine keeps the sign of a scientific number after "-$" as it was written.
+            let (number, scientific) = plain_number(body.trim())?;
+            return Some(if scientific { number } else { -number });
+        }
+        if let Some(body) = value
+            .strip_prefix(currency)
+            .or_else(|| value.strip_suffix(currency))
+        {
+            return plain_number(body.trim()).map(|(number, _)| number);
+        }
+    }
+    plain_number(value).map(|(number, _)| number)
+}
+
+// A sign, digits with commas in groups of three, a decimal dot and an exponent, as the engine
+// reads them; also whether there was an exponent.
+fn plain_number(value: &str) -> Option<(f64, bool)> {
+    let characters: Vec<char> = value.chars().collect();
+    let len = characters.len();
+    let mut position = 0;
+    let sign = match characters.first()? {
+        '-' => {
+            position = 1;
+            -1.0
+        }
+        '+' => {
+            position = 1;
+            1.0
+        }
+        _ => 1.0,
+    };
+    if position >= len || characters[position] == ',' {
+        return None;
+    }
+    let mut digits = String::new();
+    let mut groups = Vec::new();
+    while position < len {
+        let c = characters[position];
+        if c.is_ascii_digit() {
+            digits.push(c);
+        } else if c == ',' {
+            groups.push(digits.len());
+        } else {
+            break;
+        }
+        position += 1;
+    }
+    if groups
+        .iter()
+        .any(|at| !(digits.len() - at).is_multiple_of(3))
+    {
+        return None;
+    }
+    if position < len && characters[position] == '.' {
+        digits.push('.');
+        position += 1;
+        while position < len && characters[position].is_ascii_digit() {
+            digits.push(characters[position]);
+            position += 1;
+        }
+    }
+    let mut scientific = false;
+    if position + 1 < len && matches!(characters[position], 'e' | 'E') {
+        scientific = true;
+        let next = characters[position + 1];
+        if next == '-' || next == '+' || next.is_ascii_digit() {
+            digits.push('e');
+            digits.push(next);
+            position += 2;
+            while position < len && characters[position].is_ascii_digit() {
+                digits.push(characters[position]);
+                position += 1;
+            }
+        }
+    }
+    if position != len {
+        return None;
+    }
+    let number: f64 = digits.parse().ok()?;
+    Some((sign * number, scientific))
+}
+
+// A spreadsheet keeps 15 significant digits of a number, so two texts that agree to that many
+// are one value and two that differ within them are not.
+fn fifteen_digits(value: f64) -> f64 {
+    format!("{value:.14e}").parse().unwrap_or(value)
+}
+
+fn significant_digits(text: &str) -> usize {
+    let mantissa = text.split(['e', 'E']).next().unwrap_or(text);
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    digits.trim_matches('0').len()
+}
+
+// Text of up to 15 significant digits stands for a stored value when they agree to 15 digits;
+// one with more digits has to be exactly that value.
+fn agrees(parsed: f64, text: &str, stored: f64) -> bool {
+    if !parsed.is_finite() || !stored.is_finite() {
+        return false;
+    }
+    if significant_digits(text) > 15 {
+        parsed == stored
+    } else {
+        fifteen_digits(parsed) == fifteen_digits(stored)
+    }
+}
+
+fn reads_as(text: &str, stored: f64) -> bool {
+    number_value(text).is_some_and(|parsed| agrees(parsed, text, stored))
+}
+
+// The text that gives a stored number back when a file is read: what the cell shows if that
+// reads as the number, else the number itself. A constant of more than 15 digits is always
+// written whole, as the cell shows only 15; a formula's result is written as shown, as a
+// spreadsheet does.
+pub fn stored_number_text(shown: &str, stored: f64, formula: bool) -> String {
+    let whole = stored.to_string();
+    if (!formula && significant_digits(&whole) > 15) || !reads_as(shown, stored) {
+        whole
+    } else {
+        shown.to_string()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,6 +261,56 @@ mod tests {
                 "Total", "1234.56", "-0.5", "12.5%", "1234567", "2026", "a,b"
             ]
         );
+    }
+
+    #[test]
+    fn a_number_is_what_the_engine_import_reads_and_nothing_more() {
+        for (text, value) in [
+            ("5", 5.0),
+            (" 5 ", 5.0),
+            ("-$5", -5.0),
+            ("$ 5", 5.0),
+            ("5$", 5.0),
+            ("\u{20ac}5", 5.0),
+            ("5 %", 0.05),
+            ("-1,234.5", -1234.5),
+            ("1e3", 1000.0),
+            (".5", 0.5),
+        ] {
+            assert_eq!(number_value(text), Some(value), "{text}");
+        }
+        for text in [
+            "\u{a3}5", "\u{a5}5", "+$5", "$5%", "$5$", "- 5", "1,23", ",5", "5e", "inf", "", "$",
+            "1.2.3", "5 000",
+        ] {
+            assert_eq!(number_value(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_text_reads_as_a_stored_number_to_15_digits_and_a_longer_one_exactly() {
+        assert!(reads_as("1,234.5", 1234.5));
+        assert!(reads_as("0.5", 0.5));
+        assert!(!reads_as("1.23457E+15", 1_234_567_890_123_457.0));
+        assert!(!reads_as("text", 1.0));
+        assert!(!reads_as("\u{a3}5", 5.0));
+        assert!(reads_as("1234567890123456", 1_234_567_890_123_456.0));
+        assert!(!reads_as("1234567890123456", 1_234_567_890_123_457.0));
+        assert!(reads_as("12345678901234567", 12_345_678_901_234_567.0));
+    }
+
+    #[test]
+    fn a_stored_number_is_written_as_shown_unless_that_loses_digits_it_was_typed_with() {
+        let sum = 0.1 + 0.2;
+        assert_eq!(stored_number_text("0.3", sum, true), "0.3");
+        assert_eq!(stored_number_text("0.3", sum, false), "0.30000000000000004");
+        assert_eq!(
+            stored_number_text("1.23457E+15", 1_234_567_890_123_457.0, false),
+            "1234567890123457"
+        );
+        assert_eq!(stored_number_text("1,234.50", 1234.5, false), "1,234.50");
+        assert_eq!(stored_number_text("12%", 0.12, false), "12%");
+        assert_eq!(stored_number_text("1.5E+20", 1.5e20, false), "1.5E+20");
     }
 
     #[test]

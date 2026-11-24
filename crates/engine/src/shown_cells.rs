@@ -1,8 +1,11 @@
-use zenkai_types::{CellPos, Range, SheetId};
+use std::collections::HashMap;
+
+use ironcalc::base::types::{Cell, FormulaValue, SpillValue};
+use zenkai_types::{CellPos, LoggedChange, Range, SheetId};
 
 use crate::error::EngineError;
-use crate::model::content_cells_within;
-use crate::workbook::{Engine, Workbook, col_i32, row_i32};
+use crate::model::{FormatEdits, content_cells_within, position};
+use crate::workbook::{Engine, Workbook, col_i32, is_date_format, row_i32};
 
 pub(crate) const UNREADABLE_CELL: &str = "#ERROR";
 
@@ -10,6 +13,69 @@ pub struct ShownCells {
     pub end: CellPos,
     // Row-major; only cells whose text is not empty.
     pub cells: Vec<(CellPos, String)>,
+}
+
+impl ShownCells {
+    // The rows from the first to the last cell that shows something.
+    pub fn content_rows(&self) -> u32 {
+        if self.cells.is_empty() {
+            0
+        } else {
+            self.end.row.get() + 1
+        }
+    }
+}
+
+// One cell of a sheet as a save over its CSV needs it.
+pub struct FileCell {
+    pub pos: CellPos,
+    pub text: String,
+    // What the engine holds for the cell, when that is not what it shows.
+    pub input: Option<String>,
+    pub number: Option<f64>,
+    // The serial number of a number the cell shows as a date.
+    pub date: Option<f64>,
+    // What it shows could not be read, so `text` is not the cell's.
+    pub unreadable: bool,
+}
+
+impl FileCell {
+    pub fn input(&self) -> &str {
+        self.input.as_deref().unwrap_or(self.text.as_str())
+    }
+}
+
+// What a save over the CSV a sheet came from reads of it, in one pass, so that the lock on the
+// workbook is held for no longer than that.
+pub struct FileCells {
+    // Of the cells that are not spilled.
+    pub end: CellPos,
+    // Cells that show something, row-major, spilled ones included.
+    pub cells: Vec<FileCell>,
+    // Cells that hold something and show nothing (`=""`), with what they hold.
+    pub silent: Vec<(CellPos, String)>,
+    // Each cell a dynamic array formula spilled into, with the cell of the formula; row-major.
+    pub spilled: Vec<(CellPos, CellPos)>,
+    pub edits: FormatEdits,
+    // The identity of the sheet, which its changes are logged under.
+    pub sheet_key: u32,
+    // The changes logged after the one numbered `seen_change`; `None` when the engine dropped
+    // some.
+    pub changes: Option<Vec<LoggedChange>>,
+}
+
+fn stored_number(cell: &Cell) -> Option<f64> {
+    match cell {
+        Cell::NumberCell { v, .. } => Some(*v),
+        Cell::SpillCell(spill) => match spill.v {
+            SpillValue::Number(v) => Some(v),
+            _ => None,
+        },
+        cell => match cell.formula_value() {
+            Some(FormulaValue::Number(v)) => Some(*v),
+            _ => None,
+        },
+    }
 }
 
 impl Workbook {
@@ -37,6 +103,74 @@ impl Workbook {
             .filter(|(_, text)| !text.is_empty())
             .collect();
         Ok(ShownCells { end, cells })
+    }
+
+    pub fn file_cells(&self, sheet: SheetId, seen_change: u64) -> Result<FileCells, EngineError> {
+        let sheet_key = self
+            .sheet_key(sheet)
+            .ok_or(EngineError::UnknownSheet(sheet))?;
+        let used = self.used_end(sheet);
+        let model = self.model.get_model();
+        let ws = model
+            .workbook
+            .worksheet(sheet.0)
+            .map_err(|_| EngineError::UnknownSheet(sheet))?;
+        let mut positions =
+            content_cells_within(&ws.sheet_data, Range::new(CellPos::default(), used));
+        positions.sort_unstable_by_key(|pos| (pos.row, pos.col));
+        let mut found = FileCells {
+            end: CellPos::default(),
+            cells: Vec::new(),
+            silent: Vec::new(),
+            spilled: Vec::new(),
+            edits: self.model.format_edits(),
+            sheet_key,
+            changes: self.model.changes_since(seen_change),
+        };
+        let mut date_styles: HashMap<i32, bool> = HashMap::new();
+        for pos in positions {
+            let Some(cell) = ws.sheet_data.get(row_i32(pos.row), col_i32(pos.col)) else {
+                continue;
+            };
+            let spilled = match cell {
+                Cell::SpillCell(spill) => {
+                    found.spilled.push((pos, position(spill.a.0, spill.a.1)));
+                    true
+                }
+                _ => {
+                    found.end =
+                        CellPos::new(found.end.row.max(pos.row), found.end.col.max(pos.col));
+                    false
+                }
+            };
+            let shown = self.formatted_text(sheet, pos);
+            let unreadable = shown.is_none();
+            let text = shown.unwrap_or_else(|| UNREADABLE_CELL.to_string());
+            let input = self.input(sheet, pos);
+            if text.is_empty() {
+                if !spilled {
+                    found.silent.push((pos, input));
+                }
+                continue;
+            }
+            let number = stored_number(cell);
+            let date = number.filter(|_| {
+                *date_styles.entry(cell.get_style()).or_insert_with(|| {
+                    model
+                        .get_style_for_cell(sheet.0, row_i32(pos.row), col_i32(pos.col))
+                        .is_ok_and(|style| is_date_format(&style.num_fmt))
+                })
+            });
+            found.cells.push(FileCell {
+                pos,
+                input: (input != text).then_some(input),
+                text,
+                number,
+                date,
+                unreadable,
+            });
+        }
+        Ok(found)
     }
 
     pub(crate) fn formatted_text(&self, sheet: SheetId, pos: CellPos) -> Option<String> {
@@ -103,6 +237,52 @@ mod tests {
                 (pos(2, 2), "3"),
             ]
         );
+    }
+
+    #[test]
+    fn a_file_names_what_a_formula_spilled_and_finds_formulas_that_show_nothing() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook
+            .set_input(SheetId(0), pos(0, 0), "=SEQUENCE(3)")
+            .unwrap();
+        workbook.set_input(SheetId(0), pos(0, 2), "=\"\"").unwrap();
+        workbook.set_input(SheetId(0), pos(0, 3), "4").unwrap();
+        let file = workbook.file_cells(SheetId(0), 0).unwrap();
+        let shown: Vec<(CellPos, &str)> = file
+            .cells
+            .iter()
+            .map(|cell| (cell.pos, cell.text.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (pos(0, 0), "1"),
+                (pos(0, 3), "4"),
+                (pos(1, 0), "2"),
+                (pos(2, 0), "3"),
+            ]
+        );
+        assert_eq!(
+            file.spilled,
+            vec![(pos(1, 0), pos(0, 0)), (pos(2, 0), pos(0, 0))]
+        );
+        assert_eq!(file.end, pos(0, 3));
+        assert_eq!(file.silent, vec![(pos(0, 2), "=\"\"".to_string())]);
+        assert_eq!(file.cells[0].input(), "=SEQUENCE(3)");
+        assert_eq!(file.cells[1].number, Some(4.0));
+        assert!(file.changes.is_some_and(|changes| changes.len() == 3));
+    }
+
+    #[test]
+    fn a_number_shown_as_a_date_carries_its_serial() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook
+            .set_input(SheetId(0), pos(0, 0), "2026-10-08")
+            .unwrap();
+        workbook.set_input(SheetId(0), pos(0, 1), "46303").unwrap();
+        let file = workbook.file_cells(SheetId(0), 0).unwrap();
+        assert_eq!(file.cells[0].date, Some(46_303.0));
+        assert_eq!(file.cells[1].date, None);
     }
 
     #[test]

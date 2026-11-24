@@ -37,5 +37,6 @@ pub fn loaded(id: WorkbookId) -> Loaded {
         read_only: false,
         origin: zenkai_agent::protected_view::FileOrigin::Local,
         provenance: Provenance::File,
+        csv: None,
     }
 }

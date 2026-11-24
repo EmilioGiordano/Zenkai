@@ -10151,6 +10151,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "proptest",
+ "serde",
  "tempfile",
  "thiserror 2.0.21",
  "zenkai-types",

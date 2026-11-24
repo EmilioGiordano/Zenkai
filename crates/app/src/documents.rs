@@ -2,11 +2,13 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Kept, Unsupported, Workbook};
+use zenkai_engine::{FormatEdits, Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
+use crate::csv_options::{CsvBinding, Losses};
 use crate::document::{self, Document, FileJob, SharedWorkbook};
-use crate::entry::{Entry, Link, LinkStatus, Slot};
+use crate::edit_log::EditLog;
+use crate::entry::{CsvLoad, Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::{SpaceId, Spaces};
@@ -122,6 +124,8 @@ pub struct Loaded {
     pub read_only: bool,
     pub origin: FileOrigin,
     pub provenance: Provenance,
+    // Set when the workbook was read from its CSV file.
+    pub csv: Option<CsvLoad>,
 }
 
 impl Loaded {
@@ -159,12 +163,59 @@ impl Loaded {
             // made no edit yet.
             document.set_autosaved_at(Some(document.edit_count()));
         }
+        if let Some(binding) = rebuilt_csv_binding(self.csv.as_ref(), link, self.provenance) {
+            document.csv = Some(binding);
+            document.baseline_csv();
+            if let Some(csv) = &self.csv {
+                document.guard_file(csv.seen);
+            }
+        }
         document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
         document.sheet = SheetId(link.sheet.0.min(last));
         document
     }
+}
+
+// What a CSV document keeps of its binding when its workbook is built again. The engine's
+// numbers start over, so the log is renumbered. A workbook read from the file has the file's
+// rows. One from the recovery copy of unsaved work may have edits the session did not get to
+// write down, so nothing in the log can be trusted and every cell is written as it shows.
+fn rebuilt_csv_binding(
+    read: Option<&CsvLoad>,
+    link: &Link,
+    provenance: Provenance,
+) -> Option<CsvBinding> {
+    let unrecorded = link.csv.is_none();
+    let binding = match (read, link.csv.clone()) {
+        (Some(read), linked) => {
+            let linked = linked.unwrap_or_else(|| CsvBinding::new(read.options));
+            CsvBinding {
+                options: Some(read.options),
+                file_sheet: read.sheet.or(linked.file_sheet),
+                ..linked
+            }
+        }
+        (None, Some(binding)) => binding,
+        (None, None) => return None,
+    };
+    let mut rebuilt = CsvBinding {
+        seen_edits: FormatEdits::default(),
+        ..binding
+    };
+    match provenance {
+        Provenance::File if read.is_some() => {
+            rebuilt.log = EditLog::default();
+            rebuilt.introduced = Losses::default();
+        }
+        Provenance::Recovery => rebuilt.log.lose(0),
+        // Work from a copy that no binding was stored for has no log to go by.
+        Provenance::Dump if unrecorded => rebuilt.log.lose(0),
+        _ => {}
+    }
+    rebuilt.log.rebase();
+    Some(rebuilt)
 }
 
 // Takes a loaded workbook out of the list; anything else stays where it is.
@@ -408,7 +459,7 @@ impl Documents {
 
     fn link_mut(&mut self, id: WorkbookId) -> Option<&mut Link> {
         match self.slot_mut(id)? {
-            SlotMut::Other(Slot::Link(link)) => Some(link),
+            SlotMut::Other(Slot::Link(link)) => Some(&mut **link),
             _ => None,
         }
     }
@@ -639,7 +690,7 @@ impl Documents {
         match slot {
             Slot::Loaded(document) if document.can_unload() => {
                 let model = document.shared_workbook();
-                *slot = Slot::Link(document.to_link());
+                *slot = Slot::Link(Box::new(document.to_link()));
                 self.retired.push(model);
                 true
             }
@@ -717,7 +768,7 @@ impl Documents {
             return false;
         }
         let model = document.shared_workbook();
-        *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
+        *slot = Slot::Link(Box::new(document.to_hibernated_link(recovery, dump, kept)));
         self.retired.push(model);
         true
     }
@@ -855,6 +906,7 @@ mod tests {
             read_only: false,
             kind: Default::default(),
             mode: Default::default(),
+            csv: None,
             base: None,
             file_modified: None,
             pdf: Default::default(),

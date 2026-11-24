@@ -7,12 +7,13 @@ use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{
-    Engine, EngineError, Kept, SaveSnapshot, SaveTarget, Stamp, Unsupported, Workbook,
+    Engine, EngineError, FormatEdits, Kept, SaveSnapshot, SaveTarget, Stamp, Unsupported, Workbook,
 };
 use zenkai_grid::{GridCell, ViewState};
-use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
+use zenkai_types::{CellPos, Contents, LoggedChange, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
+use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
@@ -60,6 +61,9 @@ pub struct Document {
     // the copy can tell what saving over the file drops.
     pub restored: bool,
     pub read_only: bool,
+    // Set for every document whose path is a delimited text file: Save writes that file as a
+    // CSV, never the workbook as xlsx.
+    pub csv: Option<CsvBinding>,
     // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
     pub origin: FileOrigin,
     pending: Vec<Edit>,
@@ -147,6 +151,10 @@ impl Document {
         unsupported: Vec<Unsupported>,
     ) -> Document {
         let sheets = workbook.sheets();
+        let csv = path
+            .as_deref()
+            .filter(|path| files::opens_as_itself(path))
+            .map(|_| CsvBinding::unresolved().with_sheet(workbook.sheet_key(SheetId(0))));
         Document {
             id,
             space,
@@ -164,6 +172,7 @@ impl Document {
             unsupported,
             restored: false,
             read_only: false,
+            csv,
             origin: FileOrigin::Local,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
@@ -462,8 +471,64 @@ impl Document {
         }
         self.batch_running = false;
         self.stale.clear();
+        self.note_format_edits();
         self.sync_sheets();
         true
+    }
+
+    // Every edit ends in a batch, so a CSV learns here what it cannot hold changed. The counters
+    // only grow, so a batch that cannot read them leaves the binding for the next one that can.
+    fn note_format_edits(&mut self) {
+        let Some(seen) = self.csv.as_ref().map(|binding| binding.seen_edits) else {
+            return;
+        };
+        let Some((edits, changes)) = self.engine_changes(seen.seq) else {
+            return;
+        };
+        if let Some(binding) = self.csv.as_mut() {
+            binding.note(edits, changes);
+        }
+    }
+
+    // The engine's counters and the changes logged after `seen`; `None` while it is busy.
+    fn engine_changes(&self, seen: u64) -> Option<(FormatEdits, Option<Vec<LoggedChange>>)> {
+        let read = |workbook: &Workbook| (workbook.format_edits(), workbook.changes_since(seen));
+        match self.workbook.try_read() {
+            Ok(workbook) => Some(read(&workbook)),
+            Err(TryLockError::WouldBlock) => None,
+            Err(TryLockError::Poisoned(poisoned)) => Some(read(&poisoned.into_inner())),
+        }
+    }
+
+    // The document is the CSV file read with these options. What the reading itself did to the
+    // workbook is the baseline, so only what the user does after it counts as an edit.
+    pub fn bind_csv(&mut self, options: CsvOptions) {
+        let sheet = self
+            .workbook()
+            .and_then(|workbook| workbook.sheet_key(SheetId(0)));
+        self.csv = Some(CsvBinding::new(options).with_sheet(sheet));
+        self.baseline_csv();
+    }
+
+    // The engine's counters now are what the binding has seen.
+    pub fn baseline_csv(&mut self) {
+        let Some(edits) = self.workbook().map(|workbook| workbook.format_edits()) else {
+            return;
+        };
+        if let Some(binding) = self.csv.as_mut() {
+            binding.seen_edits = edits;
+        }
+    }
+
+    // The binding as a workbook that leaves memory should keep it: up to date with the engine, or
+    // with its log lost when the engine cannot be read.
+    pub fn settled_csv(&self) -> Option<CsvBinding> {
+        let mut binding = self.csv.clone()?;
+        match self.engine_changes(binding.seen_edits.seq) {
+            Some((edits, changes)) => binding.note(edits, changes),
+            None => binding.log.lose(u64::MAX),
+        }
+        Some(binding)
     }
 
     pub fn sheets_stale(&self) -> bool {
@@ -701,6 +766,14 @@ pub enum DocumentSave {
     BaseChanged,
 }
 
+// A file that is gone is not a change: saving recreates it. Without a guard nothing was seen.
+pub fn file_changed_since(guard: Option<FileSeen>, target: &Path) -> bool {
+    guard.is_some_and(|seen| match Stamp::of(target) {
+        Ok(now) => seen.changed(now),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    })
+}
+
 // Checked on every attempt: a retry writes the whole file and may drop more than the first.
 pub fn save_document_file(
     shared: &RwLock<Workbook>,
@@ -712,12 +785,7 @@ pub fn save_document_file(
 ) -> Result<DocumentSave, EngineError> {
     // A workbook that came back from a copy of its work does not hold the file it was opened
     // from, so the engine cannot tell the file changed; the stamp taken at rest can.
-    if changed == ChangedFile::Ask
-        && guard.is_some_and(|seen| match Stamp::of(target) {
-            Ok(now) => seen.changed(now),
-            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-        })
-    {
+    if changed == ChangedFile::Ask && file_changed_since(guard, target) {
         return Ok(DocumentSave::BaseChanged);
     }
     let saved = with_snapshot(
@@ -964,6 +1032,136 @@ mod tests {
         document.end_file_job(generation);
         assert!(document.begin_file_job(FileJob::Autosaving).is_some());
         assert!(document.begin_file_job(FileJob::Saving).is_none());
+    }
+
+    fn csv_document() -> Document {
+        let mut document = document();
+        document.csv = Some(CsvBinding::unresolved());
+        document
+    }
+
+    #[test]
+    fn a_csv_learns_of_what_it_cannot_hold_and_not_of_typing_or_moving_lines() {
+        use zenkai_engine::Engine;
+        let sheet = SheetId(0);
+        let a1 = CellPos::default();
+        let b2 = CellPos::parse_a1("B2").unwrap();
+        let mut document = csv_document();
+        let generation = document.generation();
+        let binding = |document: &Document| document.csv.clone().unwrap();
+
+        {
+            let mut workbook = document.workbook.write().unwrap();
+            workbook.set_input(sheet, a1, "1").unwrap();
+            workbook.clear(sheet, Range::single(a1)).unwrap();
+        }
+        document.finish_batch(generation);
+        assert!(!binding(&document).introduced.any());
+
+        {
+            let mut workbook = document.workbook.write().unwrap();
+            workbook
+                .insert_rows(sheet, zenkai_types::RowIdx::clamped(1), 1)
+                .unwrap();
+            workbook.rename_sheet(sheet, "Prices").unwrap();
+        }
+        document.finish_batch(generation);
+        assert!(!binding(&document).introduced.any());
+        assert_eq!(binding(&document).log.changes().count(), 2);
+
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
+            .unwrap();
+        document.finish_batch(generation);
+        assert!(binding(&document).introduced.formatting);
+        assert!(!binding(&document).introduced.number_formats);
+
+        {
+            let mut workbook = document.workbook.write().unwrap();
+            workbook
+                .apply_style(
+                    sheet,
+                    Range::single(a1),
+                    zenkai_types::StyleChange::Bold(true),
+                )
+                .unwrap();
+            let copied = workbook.copy(sheet, Range::single(a1)).unwrap();
+            workbook.paste(sheet, b2, &copied, false).unwrap();
+        }
+        document.finish_batch(generation);
+        assert!(binding(&document).introduced.number_formats);
+    }
+
+    #[test]
+    fn a_csv_that_leaves_memory_takes_the_changes_no_batch_noted_or_distrusts_its_log() {
+        use zenkai_engine::Engine;
+        let document = csv_document();
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_input(SheetId(0), CellPos::default(), "1")
+            .unwrap();
+        assert!(document.csv.clone().unwrap().log.is_empty());
+        let settled = document.settled_csv().unwrap();
+        assert_eq!(settled.log.changes().count(), 1);
+        assert!(!settled.log.has_lost());
+
+        let shared = Arc::clone(&document.workbook);
+        let held = shared.write().unwrap();
+        assert!(document.settled_csv().unwrap().log.has_lost());
+        drop(held);
+    }
+
+    #[test]
+    fn what_the_reading_did_is_the_baseline_and_only_what_follows_is_an_edit() {
+        use zenkai_engine::Engine;
+        let sheet = SheetId(0);
+        let mut document = document();
+        let generation = document.generation();
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
+            .unwrap();
+        document.bind_csv(CsvOptions::exported_as(zenkai_formats::Delimiter::Comma));
+        document.finish_batch(generation);
+        assert!(!document.csv.clone().unwrap().introduced.any());
+
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_row_height(sheet, zenkai_types::RowIdx::clamped(0), 40.0)
+            .unwrap();
+        document.finish_batch(generation);
+        assert!(document.csv.clone().unwrap().introduced.formatting);
+    }
+
+    #[test]
+    fn a_busy_workbook_leaves_the_counts_for_the_next_batch_that_can_read_them() {
+        use zenkai_engine::Engine;
+        let sheet = SheetId(0);
+        let mut document = csv_document();
+        let generation = document.generation();
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
+            .unwrap();
+        let shared = Arc::clone(&document.workbook);
+        let held = shared.write().unwrap();
+        document.finish_batch(generation);
+        drop(held);
+        assert!(!document.csv.clone().unwrap().introduced.any());
+
+        document.finish_batch(generation);
+        assert!(document.csv.clone().unwrap().introduced.formatting);
     }
 
     #[test]
