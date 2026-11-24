@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### License
+
+- Zenkai is now licensed under AGPL-3.0-only. Versions 0.1.0 and 0.1.1 stay under Apache-2.0.
+
 ## [0.1.1]
 
 ### Spreadsheet

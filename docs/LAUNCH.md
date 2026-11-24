@@ -9,7 +9,7 @@ too large or too messy for the usual tools.
 
 ## Already in place
 
-- Apache-2.0 license.
+- AGPL-3.0-only license (0.1.0 and 0.1.1 were Apache-2.0).
 - CI on Windows, Linux and macOS: clippy and tests.
 - Every crate at version `0.1.0`.
 

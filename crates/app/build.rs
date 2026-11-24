@@ -41,7 +41,7 @@ BEGIN
       VALUE "FileDescription", "Zenkai"
       VALUE "FileVersion", "{version}"
       VALUE "InternalName", "zenkai"
-      VALUE "LegalCopyright", "Licensed under Apache-2.0"
+      VALUE "LegalCopyright", "Licensed under AGPL-3.0-only"
       VALUE "OriginalFilename", "zenkai.exe"
       VALUE "ProductName", "Zenkai"
       VALUE "ProductVersion", "{version}"

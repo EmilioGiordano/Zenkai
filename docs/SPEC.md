@@ -87,7 +87,7 @@ Si ningún motor alcanza un nivel aceptable de corrección o fidelidad, el agent
 
 ## Arquitectura y stack
 
-Rust en todo el proyecto, con el motor aislado detrás de una interfaz propia para poder cambiarlo sin tocar la UI. Licencia del proyecto: Apache-2.0 (verificar compatibilidad con el motor elegido).
+Rust en todo el proyecto, con el motor aislado detrás de una interfaz propia para poder cambiarlo sin tocar la UI. Licencia del proyecto: AGPL-3.0-only desde 0.1.2 (0.1.0 y 0.1.1 salieron bajo Apache-2.0); las dependencias deben ser compatibles con ella.
 
 | Pieza | Elección | Notas |
 | --- | --- | --- |

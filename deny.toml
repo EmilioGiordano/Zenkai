@@ -23,6 +23,8 @@ ignore = [
 
 [licenses]
 version = 2
+# Zenkai's own crates are AGPL-3.0-only and never published; the allow list is for dependencies.
+private = { ignore = true }
 confidence-threshold = 0.9
 allow = [
     "0BSD",
