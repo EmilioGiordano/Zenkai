@@ -1,3 +1,6 @@
+use std::io::Read;
+use std::path::Path;
+
 use encoding_rs::{UTF_16BE, UTF_16LE, WINDOWS_1252};
 use serde::{Deserialize, Serialize};
 use zenkai_types::{MAX_COLS, MAX_ROWS, RowIdx};
@@ -350,6 +353,37 @@ fn count_outside_quotes(line: &str, delimiter: char) -> usize {
         .count()
 }
 
+#[derive(Debug)]
+pub enum CsvReadError {
+    Io(std::io::Error),
+    TooLarge(usize),
+}
+
+pub fn tsv_delimiter(path: &Path) -> Option<Delimiter> {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tsv"))
+        .then_some(Delimiter::Tab)
+}
+
+// The size is checked on the open file and the read is capped too, so a file that grows
+// meanwhile cannot fill memory.
+pub fn read_csv_bytes(path: &Path, limit: usize) -> Result<Vec<u8>, CsvReadError> {
+    let file = std::fs::File::open(path).map_err(CsvReadError::Io)?;
+    let length = file.metadata().map_err(CsvReadError::Io)?.len();
+    let megabytes = |bytes: u64| usize::try_from(bytes / 1024 / 1024).unwrap_or(usize::MAX);
+    if length > limit as u64 {
+        return Err(CsvReadError::TooLarge(megabytes(length)));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or_default());
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(CsvReadError::Io)?;
+    if bytes.len() > limit {
+        return Err(CsvReadError::TooLarge(megabytes(bytes.len() as u64)));
+    }
+    Ok(bytes)
+}
+
 pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, CsvError> {
     if bytes.len() > MAX_CSV_BYTES {
         return Err(CsvError::TooLarge(bytes.len() / 1024 / 1024));
@@ -605,6 +639,30 @@ mod tests {
         let bytes = write_csv(&rows, Delimiter::Comma).unwrap();
         let parsed = parse_csv(&bytes, None).unwrap();
         assert_eq!(parsed.rows, rows);
+    }
+
+    #[test]
+    fn tsv_delimiter_matches_tsv_case_insensitively() {
+        assert_eq!(tsv_delimiter(Path::new("a.tsv")), Some(Delimiter::Tab));
+        assert_eq!(tsv_delimiter(Path::new("a.TSV")), Some(Delimiter::Tab));
+        assert_eq!(tsv_delimiter(Path::new("a.csv")), None);
+        assert_eq!(tsv_delimiter(Path::new("a.txt")), None);
+    }
+
+    #[test]
+    fn read_csv_bytes_enforces_the_size_cap_and_reports_io_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.csv");
+        std::fs::write(&path, b"a,b\n1,2\n").unwrap();
+        assert_eq!(read_csv_bytes(&path, 8).unwrap(), b"a,b\n1,2\n");
+        assert!(matches!(
+            read_csv_bytes(&path, 7),
+            Err(CsvReadError::TooLarge(_))
+        ));
+        assert!(matches!(
+            read_csv_bytes(&dir.path().join("missing.csv"), 8),
+            Err(CsvReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
     }
 }
 

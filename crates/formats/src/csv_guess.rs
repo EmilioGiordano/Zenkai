@@ -44,6 +44,18 @@ pub fn import_input(field: &str) -> Cow<'_, str> {
     }
 }
 
+pub fn prepare_import_inputs(rows: &mut [Vec<String>]) {
+    for field in rows.iter_mut().flatten() {
+        let rewritten = match import_input(field) {
+            Cow::Owned(text) => Some(text),
+            Cow::Borrowed(_) => None,
+        };
+        if let Some(text) = rewritten {
+            *field = text;
+        }
+    }
+}
+
 // A number as a reader of the file takes it back as the same one: no grouping, which it could
 // not tell from decimal commas; in a decimal-comma file a plain decimal, keeping only a percent
 // sign. Text that is not a number stays as it is.
@@ -178,5 +190,21 @@ mod tests {
             inputs,
             ["-3.5", "-1234.5", "-12.5%", "'+34 600", "'-", "+5"]
         );
+    }
+
+    #[test]
+    fn prepare_import_inputs_marks_only_signed_non_numbers_in_place() {
+        let mut rows = vec![
+            vec![
+                "+34 600".to_string(),
+                "-abc".to_string(),
+                "-".to_string(),
+                "-3.5".to_string(),
+            ],
+            vec!["+5".to_string(), "=1+1".to_string(), "plain".to_string()],
+        ];
+        prepare_import_inputs(&mut rows);
+        assert_eq!(rows[0], ["'+34 600", "'-abc", "'-", "-3.5"]);
+        assert_eq!(rows[1], ["+5", "=1+1", "plain"]);
     }
 }
