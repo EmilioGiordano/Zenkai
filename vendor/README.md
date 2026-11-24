@@ -512,6 +512,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   toward the same budget as they are copied, since every cell holding one shared string got
   its own copy: a million cells of one 32,767 character string took 32 GB. A range holding
   more than about 200 MiB of text is now `#VALUE!` where Excel gives a result.
+- The `errors` test of `src/test/user_model/test_to_from_bytes.rs` checks only IronCalc's
+  `Error parsing workbook: ` prefix, since bitcode replaces its reason with `bitcode error`
+  without debug assertions, so the test failed under `cargo test --release`. Stands on its own.
 
 Zenkai-only, not for upstream:
 
