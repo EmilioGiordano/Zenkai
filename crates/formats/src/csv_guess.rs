@@ -139,7 +139,16 @@ mod tests {
 
     #[test]
     fn signed_non_numbers_become_text_and_numbers_and_formulas_stay() {
-        for field in ["+34 600", "-abc", "+x", "-", "+", "-3,5"] {
+        for field in [
+            "+34 600",
+            "-abc",
+            "+x",
+            "-",
+            "+",
+            "-3,5",
+            "-1+2",
+            "+SUM(A1:A3)",
+        ] {
             assert_eq!(import_input(field).into_owned(), format!("'{field}"));
         }
         for field in ["+5", "-3.5", "-12%", "-1,234.5", "-$5", "-\u{20ac}5"] {
