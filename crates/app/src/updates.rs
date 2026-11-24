@@ -29,7 +29,7 @@ use gpui_kit::*;
 use crate::agent_settings::AgentConfig;
 #[cfg(windows)]
 pub use download_task::{
-    can_download, cancel as cancel_download, phase as download_phase, ready_for, restart_into,
+    cancel as cancel_download, phase as download_phase, ready_for, restart_into,
     stage as stage_update, start as start_download, take_outcome as take_download_outcome, unstage,
 };
 use fetch::FetchError;
@@ -48,6 +48,54 @@ pub use transfer::{Outcome as DownloadOutcome, Phase as DownloadPhase};
 pub use version::Version;
 
 pub const RELEASES_PAGE: &str = "https://github.com/EmilioGiordano/Zenkai/releases";
+pub const INSTALL_PAGE: &str = "https://getzenkai.com";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CannotSelfUpdate {
+    NotWindows,
+    NotInstalled,
+    NoTrustedKey,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SelfUpdate {
+    Available,
+    Unavailable { reason: CannotSelfUpdate },
+}
+
+pub fn self_update() -> SelfUpdate {
+    let install_root = crate::installation::root();
+    #[cfg(windows)]
+    let has_trusted_key = signature::has_trusted_key();
+    #[cfg(not(windows))]
+    let has_trusted_key = false;
+    let decision = decide_self_update(cfg!(windows), install_root.is_some(), has_trusted_key);
+    if let SelfUpdate::Unavailable { reason } = decision {
+        let current_exe = std::env::current_exe()
+            .inspect_err(|error| tracing::warn!(%error, "could not find this executable"))
+            .ok();
+        tracing::info!(
+            ?reason,
+            ?current_exe,
+            ?install_root,
+            "cannot install update from this copy"
+        );
+    }
+    decision
+}
+
+fn decide_self_update(is_windows: bool, is_installed: bool, has_trusted_key: bool) -> SelfUpdate {
+    let reason = if !is_windows {
+        CannotSelfUpdate::NotWindows
+    } else if !is_installed {
+        CannotSelfUpdate::NotInstalled
+    } else if !has_trusted_key {
+        CannotSelfUpdate::NoTrustedKey
+    } else {
+        return SelfUpdate::Available;
+    };
+    SelfUpdate::Unavailable { reason }
+}
 
 impl Global for Updates {}
 
@@ -209,4 +257,50 @@ fn save_in_background(snapshot: Snapshot, cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CannotSelfUpdate, SelfUpdate, decide_self_update};
+
+    #[test]
+    fn an_installed_windows_copy_with_a_trusted_key_can_self_update() {
+        assert_eq!(decide_self_update(true, true, true), SelfUpdate::Available);
+    }
+
+    #[test]
+    fn a_copy_without_an_install_root_cannot_self_update() {
+        assert_eq!(
+            decide_self_update(true, false, true),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+            }
+        );
+        assert_eq!(
+            decide_self_update(true, false, false),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+            }
+        );
+    }
+
+    #[test]
+    fn an_installed_copy_without_a_trusted_key_cannot_self_update() {
+        assert_eq!(
+            decide_self_update(true, true, false),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NoTrustedKey,
+            }
+        );
+    }
+
+    #[test]
+    fn non_windows_builds_cannot_self_update() {
+        assert_eq!(
+            decide_self_update(false, false, false),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotWindows,
+            }
+        );
+    }
 }

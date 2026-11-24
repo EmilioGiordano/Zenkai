@@ -8,7 +8,7 @@ use super::notices::{Lifetime, NoticeKind, Severity};
 use crate::close_prompt::CloseGoal;
 #[cfg(windows)]
 use crate::close_prompt::CloseRoom;
-use crate::updates::{self, LauncherNotice, Report, Version};
+use crate::updates::{self, CannotSelfUpdate, LauncherNotice, Report, SelfUpdate, Version};
 #[cfg(windows)]
 use crate::updates::{Blocked, DownloadOutcome, DownloadPhase, StageError};
 
@@ -88,11 +88,28 @@ impl Workspace {
     }
 
     pub(super) fn update_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match updates::update_known(cx) {
-            None => self.notify(Severity::Info, t!("update.none_available"), cx),
+        let Some(version) = updates::update_known(cx) else {
+            self.notify(Severity::Info, t!("update.none_available"), cx);
+            return;
+        };
+        #[cfg(not(windows))]
+        let _ = version;
+        match updates::self_update() {
             #[cfg(windows)]
-            Some(version) if updates::can_download() => self.download_update(version, cx),
-            Some(_) => self.open_releases(window, cx),
+            SelfUpdate::Available => self.download_update(version, cx),
+            #[cfg(windows)]
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+            } => self.post_update_card(
+                NoticeKind::UpdateNotInstalled,
+                t!("update.not_installed"),
+                cx,
+            ),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NoTrustedKey | CannotSelfUpdate::NotWindows,
+            } => self.open_releases(window, cx),
+            #[cfg(not(windows))]
+            _ => self.open_releases(window, cx),
         }
     }
 
@@ -337,6 +354,17 @@ impl Workspace {
             .card()
             .is_some_and(|card| card.leads_to_releases());
         self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
+        if on_card {
+            self.dismiss_notice(window, cx);
+        }
+    }
+
+    pub(super) fn open_install_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let on_card = self
+            .notices
+            .card()
+            .is_some_and(|card| card.leads_to_install_page());
+        self.confirm_web_link(updates::INSTALL_PAGE.to_owned(), window, cx);
         if on_card {
             self.dismiss_notice(window, cx);
         }

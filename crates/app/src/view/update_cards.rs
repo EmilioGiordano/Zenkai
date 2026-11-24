@@ -9,7 +9,8 @@ use zenkai_i18n::t;
 
 use super::notices::NoticeKind;
 use crate::actions::{
-    CancelUpdate, DismissNotice, OpenReleases, RestartToUpdate, ShowWhatsNew, UpdateNow,
+    CancelUpdate, DismissNotice, OpenInstallPage, OpenReleases, RestartToUpdate, ShowWhatsNew,
+    UpdateNow,
 };
 use crate::keymap;
 use crate::updates::{self, DownloadPhase};
@@ -54,7 +55,7 @@ pub(super) fn download_heading(
             t!("update.not_verified_title").into(),
             Icon::new(IconName::TriangleAlert).text_color(theme.warning),
         )),
-        NoticeKind::UpdateBlocked(_) => Some((
+        NoticeKind::UpdateBlocked(_) | NoticeKind::UpdateNotInstalled => Some((
             t!("update.blocked_title").into(),
             Icon::new(IconName::TriangleAlert).text_color(theme.warning),
         )),
@@ -122,6 +123,19 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                 ))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenReleases), cx));
             vec![button_row(vec![later_button(cx), releases])]
+        }
+        NoticeKind::UpdateNotInstalled => {
+            let install = Button::new("update-open-install-page")
+                .primary()
+                .small()
+                .label(t!("update.open_install_page"))
+                .tooltip(keymap::labeled(
+                    cx,
+                    t!("update.open_install_page"),
+                    &OpenInstallPage,
+                ))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenInstallPage), cx));
+            vec![button_row(vec![later_button(cx), install])]
         }
         NoticeKind::Updated(_) => {
             let notes = Button::new("update-whats-new")
