@@ -42,7 +42,8 @@ jobs:
       matrix:
         os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["macos-latest"]' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && '["ubuntu-latest","windows-latest","macos-latest"]') || (github.event_name == 'push' && '["ubuntu-latest","windows-latest","macos-latest"]') || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # A PR that touches vendor/ also builds and runs the vendored suites on Linux, about 20 more minutes.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
