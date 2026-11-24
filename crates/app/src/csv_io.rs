@@ -116,6 +116,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
         .or_else(|| tsv_delimiter(path));
     let parsed = parse_csv(&bytes, hint)
         .map_err(|e| LoadFailure::Engine(EngineError::Rejected(e.to_string())))?;
+    drop(bytes);
     let options = match stored {
         Some(stored) => CsvOptions {
             encoding: parsed.encoding,
