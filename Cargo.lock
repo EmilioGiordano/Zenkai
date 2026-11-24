@@ -10073,6 +10073,7 @@ dependencies = [
  "windows-native-keyring-store",
  "zenkai-datagen",
  "zenkai-engine",
+ "zenkai-formats",
  "zenkai-i18n",
  "zenkai-types",
 ]
