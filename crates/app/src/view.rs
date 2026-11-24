@@ -2646,11 +2646,7 @@ impl Workspace {
         };
         let sheet = document.sheet;
         let outcome = document.workbook_mut().map(|mut workbook| {
-            let end = workbook.used_end(sheet);
-            let clipped = range.clip_to(end).unwrap_or(Range::single(range.start));
-            if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
-                return None;
-            }
+            let clipped = clipboard::copy_range(range, workbook.used_end(sheet))?;
             Some(workbook.copy(sheet, clipped))
         });
         match outcome {
