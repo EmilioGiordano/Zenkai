@@ -515,6 +515,7 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - The `errors` test of `src/test/user_model/test_to_from_bytes.rs` checks only IronCalc's
   `Error parsing workbook: ` prefix, since bitcode replaces its reason with `bitcode error`
   without debug assertions, so the test failed under `cargo test --release`. Stands on its own.
+- Date and time formats accept fractional seconds (`.0`, `.00`, `.000`) after a seconds token, rounding the serial to that precision with carry and using the locale decimal separator (`src/formatter/parser.rs`, `src/formatter/format.rs`; tests in `src/formatter/test/test_time.rs`). Stands on its own.
 
 Zenkai-only, not for upstream:
 
