@@ -1,12 +1,12 @@
 use std::io::ErrorKind;
 
 use async_channel::Receiver;
-use zenkai_engine::{Engine, Workbook, open_xlsx, run_with_engine_stack};
+use zenkai_engine::{Engine, Workbook, open_xlsx, workbook_from_rows};
 use zenkai_formats::{
     CsvError, CsvReadError, MAX_CSV_BYTES, apply, guess, parse_csv, prepare_import_inputs,
     read_csv_bytes, tsv_delimiter,
 };
-use zenkai_types::{CellPos, Range, SheetId, WorkbookId};
+use zenkai_types::{Range, SheetId, WorkbookId};
 
 use crate::tools::channel::{ToolCall, ToolResult};
 use crate::tools::error::{AgentAccess, ToolError};
@@ -130,12 +130,5 @@ fn open_csv(path: &InsidePath) -> Result<Workbook, ToolError> {
     let mut rows = parsed.rows;
     apply(guessed.decimal_mark, guessed.date_order, &mut rows);
     prepare_import_inputs(&mut rows);
-    run_with_engine_stack(move || {
-        let mut workbook = Workbook::new_empty()?;
-        workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
-        workbook.warm_used_areas();
-        workbook.forget_changes();
-        Ok(workbook)
-    })
-    .map_err(|error| ToolError::Engine(error.to_string()))
+    workbook_from_rows(rows).map_err(|error| ToolError::Engine(error.to_string()))
 }

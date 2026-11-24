@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use zenkai_agent::protected_view::file_origin;
 use zenkai_engine::{
-    Engine, EngineError, ShownCells, Workbook, run_with_engine_stack, write_atomic_streaming,
+    EngineError, ShownCells, Workbook, workbook_from_rows as engine_workbook_from_rows,
+    write_atomic_streaming,
 };
 use zenkai_formats::{
     CsvError, CsvReadError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv,
@@ -146,14 +147,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
 
 pub fn workbook_from_rows(mut rows: Vec<Vec<String>>) -> Result<Workbook, String> {
     prepare_import_inputs(&mut rows);
-    run_with_engine_stack(move || {
-        let mut workbook = Workbook::new_empty()?;
-        workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
-        workbook.warm_used_areas();
-        workbook.forget_changes();
-        Ok(workbook)
-    })
-    .map_err(|e| e.to_string())
+    engine_workbook_from_rows(rows).map_err(|e| e.to_string())
 }
 
 // The read lock is held only while the shown cells are gathered; the write can take far
@@ -391,6 +385,7 @@ fn write_shown_rows(
 
 #[cfg(test)]
 mod tests {
+    use zenkai_engine::Engine;
     use zenkai_formats::{DecimalMark, Encoding};
     use zenkai_types::{ColIdx, Contents, RowIdx};
 

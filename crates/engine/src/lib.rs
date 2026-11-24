@@ -17,6 +17,7 @@ mod preflight;
 mod ragged_inputs;
 mod rectangles;
 mod row_split;
+mod rows_workbook;
 mod save;
 mod save_parts;
 mod save_patch;
@@ -44,6 +45,7 @@ pub use file::{
 pub use hibernation::{Kept, MAX_DUMP_BYTES};
 pub use model::FormatEdits;
 pub use preflight::run_with_engine_stack;
+pub use rows_workbook::workbook_from_rows;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use saved::Stamp;
 pub use shown_cells::{FileCell, FileCells, ShownCells};
