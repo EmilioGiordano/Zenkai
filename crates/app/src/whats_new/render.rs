@@ -92,9 +92,7 @@ impl NotesView {
                         t!("palette.check_for_updates"),
                         &CheckForUpdates,
                     ))
-                    .on_click(|_, _, cx| {
-                        crate::updates::check(cx, crate::updates::Source::Palette)
-                    }),
+                    .on_click(|_, _, cx| crate::updates::check_now(cx)),
             )
     }
 
