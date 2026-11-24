@@ -192,6 +192,8 @@ pub struct Grid {
     suggestion: usize,
     used_end: CellPos,
     scroll_drag: Option<ScrollDrag>,
+    wheel_rows: f32,
+    wheel_cols: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -252,6 +254,8 @@ impl Grid {
             suggestion: 0,
             used_end: CellPos::default(),
             scroll_drag: None,
+            wheel_rows: 0.0,
+            wheel_cols: 0.0,
         }
     }
 
@@ -707,6 +711,8 @@ impl Grid {
     }
 
     fn viewport_changed(&mut self, cx: &mut Context<Self>) {
+        self.wheel_rows = 0.0;
+        self.wheel_cols = 0.0;
         self.recompute_viewport(cx);
         cx.emit(GridEvent::ViewportChanged);
         cx.notify();
@@ -1188,18 +1194,22 @@ impl Grid {
             self.set_zoom(self.zoom + step, cx);
             return;
         }
-        let rows = -(f32::from(delta.y) / f32::from(line) * 3.0).round() as i64;
-        let cols = -(f32::from(delta.x) / f32::from(line)).round() as i64;
+        let rows = -f32::from(delta.y) / f32::from(line) * 3.0;
+        let cols = -f32::from(delta.x) / f32::from(line);
         let (rows, cols) = if event.modifiers.shift {
-            (0, rows)
+            (0.0, rows)
         } else {
             (rows, cols)
         };
-        if rows != 0 || cols != 0 {
-            self.top = self.shifted_row(self.top, rows);
-            self.left = self.shifted_col(self.left, cols);
+        let (row_steps, wheel_rows) = wheel_steps(self.wheel_rows, rows);
+        let (col_steps, wheel_cols) = wheel_steps(self.wheel_cols, cols);
+        if row_steps != 0 || col_steps != 0 {
+            self.top = self.shifted_row(self.top, row_steps);
+            self.left = self.shifted_col(self.left, col_steps);
             self.viewport_changed(cx);
         }
+        self.wheel_rows = wheel_rows;
+        self.wheel_cols = wheel_cols;
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1854,6 +1864,19 @@ fn runs(indices: impl Iterator<Item = u32>) -> Vec<(u32, u32)> {
     runs
 }
 
+// Precision wheels send many deltas below one step; the remainder carries to the next event
+// so a slow pan still moves, and a reversal drops it so the pan does not first undo itself.
+fn wheel_steps(remainder: f32, delta: f32) -> (i64, f32) {
+    let carried = if remainder * delta < 0.0 {
+        0.0
+    } else {
+        remainder
+    };
+    let total = carried + delta;
+    let steps = total.trunc();
+    (steps as i64, total - steps)
+}
+
 // A whole column spans every row and a whole row every column: such a selection is
 // revealed only along the other axis, so the view stays put as in Excel.
 fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColIdx>) {
@@ -1875,7 +1898,7 @@ mod tests {
     use super::{
         Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, Selection, cached_ranges,
         capped_frozen, cycle_within, moved_selection, next_boundary, prev_boundary, reveal_axes,
-        shown_contains, typed_preview,
+        shown_contains, typed_preview, wheel_steps,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
@@ -1986,6 +2009,39 @@ mod tests {
         (first..=last)
             .map(|col| ColIdx::clamped(i64::from(col)))
             .collect()
+    }
+
+    #[test]
+    fn small_wheel_deltas_add_up_to_one_step() {
+        let (mut steps, mut remainder) = (0, 0.0);
+        for _ in 0..4 {
+            let (more, rest) = wheel_steps(remainder, 0.25);
+            steps += more;
+            remainder = rest;
+        }
+        assert_eq!((steps, remainder), (1, 0.0));
+        assert_eq!(wheel_steps(0.0, 0.25), (0, 0.25));
+    }
+
+    #[test]
+    fn reversing_the_wheel_clears_the_remainder() {
+        assert_eq!(wheel_steps(0.75, -0.5), (0, -0.5));
+        assert_eq!(wheel_steps(-0.75, 0.5), (0, 0.5));
+    }
+
+    #[test]
+    fn a_large_wheel_delta_gives_several_steps_and_keeps_the_rest() {
+        let (steps, remainder) = wheel_steps(0.5, 2.75);
+        assert_eq!(steps, 3);
+        assert!((remainder - 0.25).abs() < 1e-6);
+        assert_eq!(wheel_steps(0.0, -2.5), (-2, -0.5));
+    }
+
+    #[test]
+    fn whole_line_wheel_deltas_move_whole_rows_as_before() {
+        assert_eq!(wheel_steps(0.0, 3.0), (3, 0.0));
+        assert_eq!(wheel_steps(0.0, -6.0), (-6, 0.0));
+        assert_eq!(wheel_steps(0.0, 0.0), (0, 0.0));
     }
 
     #[test]
