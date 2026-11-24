@@ -7,7 +7,6 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use super::notice_card::{EDGE_GAP, STATUS_BAR_HEIGHT, severity_icon, severity_title};
-use crate::actions::CloseMessages;
 use crate::interface_scale::rem_px;
 
 const PANEL_WIDTH: f32 = 480.0;
@@ -173,9 +172,10 @@ impl Workspace {
                 .left_0()
                 .size_full()
                 .occlude()
-                .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                    window.dispatch_action(Box::new(CloseMessages), cx)
-                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| this.close_messages(window, cx)),
+                )
                 .child(
                     div()
                         .absolute()
@@ -220,12 +220,9 @@ impl Workspace {
                                                 .small()
                                                 .icon(IconName::Close)
                                                 .accessibility_label(t!("gen.close"))
-                                                .on_click(|_, window, cx| {
-                                                    window.dispatch_action(
-                                                        Box::new(CloseMessages),
-                                                        cx,
-                                                    )
-                                                }),
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.close_messages(window, cx)
+                                                })),
                                         ),
                                 )
                                 .child(list),

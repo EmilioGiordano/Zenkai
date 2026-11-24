@@ -7,6 +7,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, Theme};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use super::Workspace;
 use super::notices::NoticeKind;
 use crate::actions::{
     CancelUpdate, DismissNotice, OpenInstallPage, OpenReleases, RestartToUpdate, ShowWhatsNew,
@@ -67,13 +68,13 @@ pub(super) fn download_heading(
     }
 }
 
-fn later_button(cx: &App) -> Button {
+fn later_button(cx: &Context<Workspace>) -> Button {
     Button::new("update-later")
         .ghost()
         .small()
         .label(t!("update.later"))
         .tooltip(keymap::labeled(cx, t!("update.later"), &DismissNotice))
-        .on_click(|_, window, cx| window.dispatch_action(Box::new(DismissNotice), cx))
+        .on_click(cx.listener(|this, _, window, cx| this.dismiss_notice(window, cx)))
 }
 
 fn button_row(buttons: Vec<Button>) -> AnyElement {
@@ -84,14 +85,14 @@ fn button_row(buttons: Vec<Button>) -> AnyElement {
         .into_any_element()
 }
 
-pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
+pub(super) fn download_parts(kind: NoticeKind, cx: &Context<Workspace>) -> Vec<AnyElement> {
     match kind {
         NoticeKind::UpdateDownloading(_) => {
             let cancel = Button::new("update-cancel")
                 .small()
                 .label(t!("update.cancel"))
                 .tooltip(keymap::labeled(cx, t!("update.cancel"), &CancelUpdate))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(CancelUpdate), cx));
+                .on_click(cx.listener(|this, _, window, cx| this.cancel_update(window, cx)));
             let mut parts: Vec<AnyElement> = render_progress(updates::download_phase(cx), cx)
                 .into_iter()
                 .collect();
@@ -108,7 +109,7 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                     t!("update.restart_now"),
                     &RestartToUpdate,
                 ))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(RestartToUpdate), cx));
+                .on_click(cx.listener(|this, _, window, cx| this.restart_to_update(window, cx)));
             vec![button_row(vec![later_button(cx), restart])]
         }
         NoticeKind::UpdateBlocked(_) => {
@@ -121,7 +122,7 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                     t!("update.open_releases"),
                     &OpenReleases,
                 ))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenReleases), cx));
+                .on_click(cx.listener(|this, _, window, cx| this.open_releases(window, cx)));
             vec![button_row(vec![later_button(cx), releases])]
         }
         NoticeKind::UpdateNotInstalled => {
@@ -134,7 +135,7 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                     t!("update.open_install_page"),
                     &OpenInstallPage,
                 ))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenInstallPage), cx));
+                .on_click(cx.listener(|this, _, window, cx| this.open_install_page(window, cx)));
             vec![button_row(vec![later_button(cx), install])]
         }
         NoticeKind::Updated(_) => {
@@ -143,7 +144,7 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                 .small()
                 .label(t!("whats_new.name"))
                 .tooltip(keymap::labeled(cx, t!("whats_new.name"), &ShowWhatsNew))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowWhatsNew), cx));
+                .on_click(cx.listener(|this, _, window, cx| this.show_whats_new(window, cx)));
             vec![button_row(vec![notes])]
         }
         NoticeKind::UpdateNotVerified(_) => {
@@ -152,14 +153,14 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                 .small()
                 .label(t!("update.try_again"))
                 .tooltip(keymap::labeled(cx, t!("update.try_again"), &UpdateNow))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(UpdateNow), cx));
+                .on_click(cx.listener(|this, _, window, cx| this.update_now(window, cx)));
             vec![button_row(vec![later_button(cx), again])]
         }
         NoticeKind::Plain | NoticeKind::UpdateAvailable(_) => Vec::new(),
     }
 }
 
-pub(super) fn download_status(cx: &App) -> Option<AnyElement> {
+pub(super) fn download_status(cx: &Context<Workspace>) -> Option<AnyElement> {
     let phase = updates::download_phase(cx);
     let text: SharedString = match phase {
         DownloadPhase::Downloading { .. } => match phase.percent() {
@@ -182,7 +183,7 @@ pub(super) fn download_status(cx: &App) -> Option<AnyElement> {
     )
 }
 
-fn restart_status(cx: &App) -> AnyElement {
+fn restart_status(cx: &Context<Workspace>) -> AnyElement {
     let label = t!("update.status_restart");
     h_flex()
         .id("status-restart-to-update")
@@ -200,7 +201,7 @@ fn restart_status(cx: &App) -> AnyElement {
             ))
             .build(window, cx)
         })
-        .on_click(|_, window, cx| window.dispatch_action(Box::new(RestartToUpdate), cx))
+        .on_click(cx.listener(|this, _, window, cx| this.restart_to_update(window, cx)))
         .child(Icon::new(IconName::CircleCheck).size_3())
         .child(label)
         .into_any_element()

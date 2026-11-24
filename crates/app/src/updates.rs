@@ -199,6 +199,10 @@ pub fn mark_announced(cx: &mut App, version: Version) {
     save_in_background(snapshot, cx);
 }
 
+pub fn check_now(cx: &mut App) {
+    check(cx, Source::Palette);
+}
+
 pub fn check(cx: &mut App, source: Source) {
     let (Some(installed), Some(started_at)) = (Version::installed(), now()) else {
         tracing::error!("the update check needs the installed version and the clock");

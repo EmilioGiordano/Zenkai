@@ -225,9 +225,9 @@ impl Workspace {
                                             t!("notice.copy"),
                                             &CopyNotice,
                                         ))
-                                        .on_click(|_, window, cx| {
-                                            window.dispatch_action(Box::new(CopyNotice), cx)
-                                        }),
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.copy_notice(cx)),
+                                        ),
                                 )
                                 .child(
                                     Button::new("notice-close")
@@ -240,9 +240,9 @@ impl Workspace {
                                             t!("notice.close"),
                                             &DismissNotice,
                                         ))
-                                        .on_click(|_, window, cx| {
-                                            window.dispatch_action(Box::new(DismissNotice), cx)
-                                        }),
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.dismiss_notice(window, cx)
+                                        })),
                                 ),
                         )
                         .child(
@@ -263,9 +263,9 @@ impl Workspace {
                                             t!("notice.show_all"),
                                             &ShowMessages,
                                         ))
-                                        .on_click(|_, window, cx| {
-                                            window.dispatch_action(Box::new(ShowMessages), cx)
-                                        }),
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.toggle_messages(window, cx)
+                                        })),
                                 ),
                             )
                         })
@@ -284,9 +284,9 @@ impl Workspace {
                                                 t!("whats_new.name"),
                                                 &ShowWhatsNew,
                                             ))
-                                            .on_click(|_, window, cx| {
-                                                window.dispatch_action(Box::new(ShowWhatsNew), cx)
-                                            }),
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.show_whats_new(window, cx)
+                                            })),
                                     )
                                     .child(
                                         Button::new("update-later")
@@ -298,9 +298,9 @@ impl Workspace {
                                                 t!("update.later"),
                                                 &DismissNotice,
                                             ))
-                                            .on_click(|_, window, cx| {
-                                                window.dispatch_action(Box::new(DismissNotice), cx)
-                                            }),
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.dismiss_notice(window, cx)
+                                            })),
                                     )
                                     .child(
                                         Button::new("update-now")
@@ -312,9 +312,9 @@ impl Workspace {
                                                 t!("update.now"),
                                                 &UpdateNow,
                                             ))
-                                            .on_click(|_, window, cx| {
-                                                window.dispatch_action(Box::new(UpdateNow), cx)
-                                            }),
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.update_now(window, cx)
+                                            })),
                                     ),
                             )
                         })

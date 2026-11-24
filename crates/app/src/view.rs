@@ -3848,7 +3848,7 @@ impl Workspace {
                         ))
                         .build(window, cx)
                     })
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowMessages), cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_messages(window, cx)))
                     .child(Icon::new(icon).size_3().flex_none())
                     .child(div().min_w_0().truncate().child(summary)),
             );

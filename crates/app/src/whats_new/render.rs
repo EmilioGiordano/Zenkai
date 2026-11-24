@@ -57,9 +57,7 @@ impl NotesView {
                             .small()
                             .label(t!("update.now"))
                             .tooltip(keymap::labeled(cx, t!("update.now"), &UpdateNow))
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(UpdateNow), cx)
-                            }),
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(NotesEvent::UpdateNow))),
                     ),
             )
     }
@@ -94,9 +92,7 @@ impl NotesView {
                         t!("palette.check_for_updates"),
                         &CheckForUpdates,
                     ))
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(CheckForUpdates), cx)
-                    }),
+                    .on_click(|_, _, cx| crate::updates::check_now(cx)),
             )
     }
 
