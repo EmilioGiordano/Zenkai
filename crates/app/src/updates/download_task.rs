@@ -4,13 +4,7 @@ use gpui_kit::*;
 use super::handoff::{self, StageError};
 use super::prepare::{self, PrepareError};
 use super::transfer::{Event, NextStart, Outcome, Phase, StageEnd};
-use super::{Updates, Version, download, notes, signature};
-
-// Only an install laid out for the launcher, with a key to check what arrives, downloads an
-// update; anywhere else "Update now" opens the Releases page.
-pub fn can_download() -> bool {
-    crate::installation::update_folder().is_some() && signature::has_trusted_key()
-}
+use super::{Updates, Version, download, notes};
 
 pub fn phase(cx: &App) -> Phase {
     cx.global::<Updates>().transfer.phase()

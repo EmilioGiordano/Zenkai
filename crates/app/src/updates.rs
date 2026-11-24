@@ -21,6 +21,7 @@ mod store;
 mod transfer;
 mod version;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +30,7 @@ use gpui_kit::*;
 use crate::agent_settings::AgentConfig;
 #[cfg(windows)]
 pub use download_task::{
-    can_download, cancel as cancel_download, phase as download_phase, ready_for, restart_into,
+    cancel as cancel_download, phase as download_phase, ready_for, restart_into,
     stage as stage_update, start as start_download, take_outcome as take_download_outcome, unstage,
 };
 use fetch::FetchError;
@@ -48,6 +49,62 @@ pub use transfer::{Outcome as DownloadOutcome, Phase as DownloadPhase};
 pub use version::Version;
 
 pub const RELEASES_PAGE: &str = "https://github.com/EmilioGiordano/Zenkai/releases";
+pub const INSTALL_PAGE: &str = "https://getzenkai.com";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CannotSelfUpdate {
+    NotWindows,
+    NotInstalled,
+    NoTrustedKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelfUpdate {
+    Available,
+    Unavailable {
+        reason: CannotSelfUpdate,
+        current_exe: Option<PathBuf>,
+        install_root: Option<PathBuf>,
+    },
+}
+
+pub fn self_update() -> SelfUpdate {
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => Some(path),
+        Err(error) => {
+            tracing::warn!(%error, "could not find this executable");
+            None
+        }
+    };
+    let install_root = crate::installation::root().map(Path::to_path_buf);
+    #[cfg(windows)]
+    let has_trusted_key = signature::has_trusted_key();
+    #[cfg(not(windows))]
+    let has_trusted_key = false;
+    decide_self_update(cfg!(windows), current_exe, install_root, has_trusted_key)
+}
+
+fn decide_self_update(
+    is_windows: bool,
+    current_exe: Option<PathBuf>,
+    install_root: Option<PathBuf>,
+    has_trusted_key: bool,
+) -> SelfUpdate {
+    let reason = if !is_windows {
+        CannotSelfUpdate::NotWindows
+    } else if current_exe.is_none() || install_root.is_none() {
+        CannotSelfUpdate::NotInstalled
+    } else if !has_trusted_key {
+        CannotSelfUpdate::NoTrustedKey
+    } else {
+        return SelfUpdate::Available;
+    };
+    SelfUpdate::Unavailable {
+        reason,
+        current_exe,
+        install_root,
+    }
+}
 
 impl Global for Updates {}
 
@@ -209,4 +266,102 @@ fn save_in_background(snapshot: Snapshot, cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{CannotSelfUpdate, SelfUpdate, decide_self_update};
+
+    #[test]
+    fn an_installed_windows_copy_with_a_trusted_key_can_self_update() {
+        let decision = decide_self_update(
+            true,
+            Some(PathBuf::from(
+                r"C:\Users\me\AppData\Local\Zenkai\app\zenkai.exe",
+            )),
+            Some(PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai")),
+            true,
+        );
+        assert_eq!(decision, SelfUpdate::Available);
+    }
+
+    #[test]
+    fn a_copy_without_an_install_root_cannot_self_update() {
+        let desktop = PathBuf::from(r"C:\Users\me\Desktop\zenkai.exe");
+        assert_eq!(
+            decide_self_update(true, Some(desktop.clone()), None, true),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+                current_exe: Some(desktop.clone()),
+                install_root: None,
+            }
+        );
+        assert_eq!(
+            decide_self_update(true, Some(desktop.clone()), None, false),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+                current_exe: Some(desktop),
+                install_root: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_copy_without_a_resolved_executable_cannot_self_update() {
+        let root = PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai");
+        assert_eq!(
+            decide_self_update(true, None, None, true),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+                current_exe: None,
+                install_root: None,
+            }
+        );
+        assert_eq!(
+            decide_self_update(true, None, Some(root.clone()), true),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotInstalled,
+                current_exe: None,
+                install_root: Some(root),
+            }
+        );
+    }
+
+    #[test]
+    fn an_installed_copy_without_a_trusted_key_cannot_self_update() {
+        let running = PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai\app\zenkai.exe");
+        let root = PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai");
+        assert_eq!(
+            decide_self_update(true, Some(running.clone()), Some(root.clone()), false),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NoTrustedKey,
+                current_exe: Some(running),
+                install_root: Some(root),
+            }
+        );
+    }
+
+    #[test]
+    fn non_windows_builds_cannot_self_update() {
+        let running = PathBuf::from("/usr/local/bin/zenkai");
+        let root = PathBuf::from("/usr/local");
+        assert_eq!(
+            decide_self_update(false, Some(running.clone()), Some(root.clone()), true),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotWindows,
+                current_exe: Some(running.clone()),
+                install_root: Some(root),
+            }
+        );
+        assert_eq!(
+            decide_self_update(false, Some(running.clone()), None, false),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NotWindows,
+                current_exe: Some(running),
+                install_root: None,
+            }
+        );
+    }
 }
