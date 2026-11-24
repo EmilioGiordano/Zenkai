@@ -1196,11 +1196,7 @@ impl Grid {
         }
         let rows = -f32::from(delta.y) / f32::from(line) * 3.0;
         let cols = -f32::from(delta.x) / f32::from(line);
-        let (rows, cols) = if event.modifiers.shift {
-            (0.0, rows)
-        } else {
-            (rows, cols)
-        };
+        let (rows, cols) = wheel_axes(rows, cols, event.modifiers.shift);
         let (row_steps, wheel_rows) = wheel_steps(self.wheel_rows, rows);
         let (col_steps, wheel_cols) = wheel_steps(self.wheel_cols, cols);
         if row_steps != 0 || col_steps != 0 {
@@ -1877,6 +1873,16 @@ fn wheel_steps(remainder: f32, delta: f32) -> (i64, f32) {
     (steps as i64, total - steps)
 }
 
+// Shift turns a vertical wheel into a horizontal one; a wheel that already sends a horizontal
+// delta, as Windows does for shift, keeps it.
+fn wheel_axes(rows: f32, cols: f32, shift: bool) -> (f32, f32) {
+    if shift && cols == 0.0 {
+        (0.0, rows)
+    } else {
+        (rows, cols)
+    }
+}
+
 // A whole column spans every row and a whole row every column: such a selection is
 // revealed only along the other axis, so the view stays put as in Excel.
 fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColIdx>) {
@@ -1898,7 +1904,7 @@ mod tests {
     use super::{
         Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, Selection, cached_ranges,
         capped_frozen, cycle_within, moved_selection, next_boundary, prev_boundary, reveal_axes,
-        shown_contains, typed_preview, wheel_steps,
+        shown_contains, typed_preview, wheel_axes, wheel_steps,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
@@ -2042,6 +2048,22 @@ mod tests {
         assert_eq!(wheel_steps(0.0, 3.0), (3, 0.0));
         assert_eq!(wheel_steps(0.0, -6.0), (-6, 0.0));
         assert_eq!(wheel_steps(0.0, 0.0), (0, 0.0));
+    }
+
+    #[test]
+    fn shift_turns_a_vertical_wheel_into_columns() {
+        assert_eq!(wheel_axes(3.0, 0.0, true), (0.0, 3.0));
+    }
+
+    #[test]
+    fn shift_keeps_a_horizontal_delta_as_columns() {
+        assert_eq!(wheel_axes(0.0, 2.0, true), (0.0, 2.0));
+    }
+
+    #[test]
+    fn without_shift_each_wheel_axis_keeps_its_own_direction() {
+        assert_eq!(wheel_axes(3.0, 0.0, false), (3.0, 0.0));
+        assert_eq!(wheel_axes(0.0, 2.0, false), (0.0, 2.0));
     }
 
     #[test]
