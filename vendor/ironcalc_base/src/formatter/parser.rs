@@ -33,6 +33,7 @@ pub enum TextToken {
     MinutePadded,
     Second,
     SecondPadded,
+    SubSecond(u8),
     ElapsedHour,
     ElapsedHourPadded,
     ElapsedMinute,
@@ -59,6 +60,7 @@ pub struct NumberPart {
 pub struct DatePart {
     pub color: Option<i32>,
     pub use_ampm: bool,
+    pub sub_second_digits: u8,
     pub tokens: Vec<TextToken>,
 }
 
@@ -157,12 +159,20 @@ impl Parser {
         let mut index = 0;
         let mut currency = None;
         let mut is_time = false;
+        let mut sub_second_digits = 0_u8;
 
         while token != Token::EOF && token != Token::Separator {
-            let next_token = self.lexer.next_token();
+            let mut next_token = self.lexer.next_token();
             let token_is_digit = token.is_digit();
             is_number = is_number || token_is_digit;
             let next_token_is_digit = next_token.is_digit();
+            let is_seconds = matches!(
+                token,
+                Token::Second
+                    | Token::SecondPadded
+                    | Token::ElapsedSecond
+                    | Token::ElapsedSecondPadded
+            );
             if token_is_digit {
                 if is_scientific {
                     exponent_digit_count += 1;
@@ -388,6 +398,16 @@ impl Parser {
                     tokens.push(TextToken::ElapsedSecondPadded);
                 }
             }
+            if is_seconds && next_token == Token::Period && self.lexer.peek_token() == Token::Zero {
+                let mut digits = 0_u8;
+                while digits < 3 && self.lexer.peek_token() == Token::Zero {
+                    self.lexer.next_token();
+                    digits += 1;
+                }
+                tokens.push(TextToken::SubSecond(digits));
+                sub_second_digits = sub_second_digits.max(digits);
+                next_token = self.lexer.next_token();
+            }
             last_token_is_digit = token_is_digit;
             token = next_token;
         }
@@ -398,6 +418,7 @@ impl Parser {
             ParsePart::Date(DatePart {
                 color,
                 use_ampm,
+                sub_second_digits,
                 tokens,
             })
         } else {

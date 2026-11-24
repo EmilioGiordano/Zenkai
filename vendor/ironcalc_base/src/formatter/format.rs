@@ -165,11 +165,55 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
         ParsePart::Date(p) => {
             let tokens = &p.tokens;
             let mut text = "".to_string();
-            let time_fract = value.fract();
-            let hours = (time_fract * 24.0).floor();
-            let minutes = ((time_fract * 24.0 - hours) * 60.0).floor();
-            let seconds = ((((time_fract * 24.0 - hours) * 60.0) - minutes) * 60.0).round();
-            let serial = value.floor() as i64;
+            let (
+                serial,
+                hours,
+                minutes,
+                seconds,
+                sub_seconds,
+                elapsed_hours,
+                elapsed_minutes,
+                elapsed_seconds,
+            ) = if p.sub_second_digits > 0 {
+                let scale = 10_i64.pow(p.sub_second_digits as u32);
+                let ticks_per_day = 86_400 * scale;
+                let whole_days = value.trunc() as i64;
+                let fract_ticks = (value.fract() * ticks_per_day as f64).round() as i64;
+                let serial = whole_days.saturating_add(fract_ticks.div_euclid(ticks_per_day));
+                let day_ticks = fract_ticks.rem_euclid(ticks_per_day);
+                let day_seconds = day_ticks / scale;
+                let sub_seconds = day_ticks % scale;
+                let hours = day_seconds / 3600;
+                let minutes = (day_seconds % 3600) / 60;
+                let seconds = day_seconds % 60;
+                let total_seconds = serial.saturating_mul(86_400).saturating_add(day_seconds);
+                (
+                    serial,
+                    hours,
+                    minutes,
+                    seconds,
+                    sub_seconds,
+                    total_seconds / 3600,
+                    total_seconds / 60,
+                    total_seconds,
+                )
+            } else {
+                let time_fract = value.fract();
+                let hours = (time_fract * 24.0).floor();
+                let minutes = ((time_fract * 24.0 - hours) * 60.0).floor();
+                let seconds = ((((time_fract * 24.0 - hours) * 60.0) - minutes) * 60.0).round();
+                let serial = value.floor() as i64;
+                (
+                    serial,
+                    hours as i64,
+                    minutes as i64,
+                    seconds as i64,
+                    0,
+                    (value * 24.0).floor() as i32 as i64,
+                    (value * 24.0 * 60.0).floor() as i32 as i64,
+                    (value * 24.0 * 60.0 * 60.0).floor() as i32 as i64,
+                )
+            };
             let date = excel_serial_to_ymd(serial);
             let weekday = excel_serial_weekday(serial);
             for token in tokens {
@@ -353,7 +397,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                         text = format!("{text}{}", date.0);
                     }
                     TextToken::Hour => {
-                        let mut hour = hours as i32;
+                        let mut hour = hours;
                         if p.use_ampm {
                             if hour == 0 {
                                 hour = 12;
@@ -364,7 +408,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                         text = format!("{text}{hour}");
                     }
                     TextToken::HourPadded => {
-                        let mut hour = hours as i32;
+                        let mut hour = hours;
                         if p.use_ampm {
                             if hour == 0 {
                                 hour = 12;
@@ -375,48 +419,45 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                         text = format!("{text}{hour:02}");
                     }
                     TextToken::Second => {
-                        let second = seconds as i32;
-                        text = format!("{text}{second}");
+                        text = format!("{text}{seconds}");
                     }
                     TextToken::SecondPadded => {
-                        let second = seconds as i32;
-                        text = format!("{text}{second:02}");
+                        text = format!("{text}{seconds:02}");
+                    }
+                    TextToken::SubSecond(digits) => {
+                        let divisor = 10_i64.pow((p.sub_second_digits - *digits) as u32);
+                        let frac = sub_seconds / divisor;
+                        let width = *digits as usize;
+                        let decimal_separator = &locale.numbers.symbols.decimal;
+                        text = format!("{text}{decimal_separator}{frac:0width$}");
                     }
                     TextToken::AMPM => {
-                        let ampm = if hours < 12.0 { "AM" } else { "PM" };
+                        let ampm = if hours < 12 { "AM" } else { "PM" };
                         text = format!("{text}{ampm}");
                     }
                     TextToken::Minute => {
-                        let minute = minutes as i32;
-                        text = format!("{text}{minute}");
+                        text = format!("{text}{minutes}");
                     }
                     TextToken::MinutePadded => {
-                        let minute = minutes as i32;
-                        text = format!("{text}{minute:02}");
+                        text = format!("{text}{minutes:02}");
                     }
                     TextToken::ElapsedHour => {
-                        let hour = (value * 24.0).floor() as i32;
-                        text = format!("{text}{hour}");
+                        text = format!("{text}{elapsed_hours}");
                     }
                     TextToken::ElapsedHourPadded => {
-                        let hour = (value * 24.0).floor() as i32;
-                        text = format!("{text}{hour:02}");
+                        text = format!("{text}{elapsed_hours:02}");
                     }
                     TextToken::ElapsedMinute => {
-                        let minute = (value * 24.0 * 60.0).floor() as i32;
-                        text = format!("{text}{minute}");
+                        text = format!("{text}{elapsed_minutes}");
                     }
                     TextToken::ElapsedMinutePadded => {
-                        let minute = (value * 24.0 * 60.0).floor() as i32;
-                        text = format!("{text}{minute:02}");
+                        text = format!("{text}{elapsed_minutes:02}");
                     }
                     TextToken::ElapsedSecond => {
-                        let second = (value * 24.0 * 60.0 * 60.0).floor() as i32;
-                        text = format!("{text}{second}");
+                        text = format!("{text}{elapsed_seconds}");
                     }
                     TextToken::ElapsedSecondPadded => {
-                        let second = (value * 24.0 * 60.0 * 60.0).floor() as i32;
-                        text = format!("{text}{second:02}");
+                        text = format!("{text}{elapsed_seconds:02}");
                     }
                 }
             }
@@ -636,6 +677,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                     TextToken::MinutePadded => {}
                     TextToken::Second => {}
                     TextToken::SecondPadded => {}
+                    TextToken::SubSecond(_) => {}
                     TextToken::AMPM => {}
                     TextToken::ElapsedHour => {}
                     TextToken::ElapsedHourPadded => {}

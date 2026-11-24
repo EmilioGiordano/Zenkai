@@ -70,3 +70,93 @@ fn elapsed_hour_padded() {
     let formatted = format_number(value, format, locale);
     assert_eq!(formatted.text, "02:24:00");
 }
+
+#[test]
+fn fractional_seconds() {
+    let locale = get_default_locale();
+    let fmt = r"yyyy\-mm\-dd\ hh:mm:ss.000";
+    assert_eq!(
+        format_number(45331.417007951401, fmt, locale).text,
+        "2024-02-09 10:00:29.487"
+    );
+    assert_eq!(
+        format_number(45860.0, fmt, locale).text,
+        "2025-07-22 00:00:00.000"
+    );
+
+    assert_eq!(
+        format_number(45331.417007951401, "hh:mm:ss.0", locale).text,
+        "10:00:29.5"
+    );
+    assert_eq!(
+        format_number(45331.417007951401, "hh:mm:ss.00", locale).text,
+        "10:00:29.49"
+    );
+    assert_eq!(
+        format_number(5.05 / 86_400.0, "ss.00", locale).text,
+        "05.05"
+    );
+    assert_eq!(format_number(5.0 / 86_400.0, "s.0", locale).text, "5.0");
+}
+
+#[test]
+fn fractional_seconds_carry() {
+    let locale = get_default_locale();
+    assert_eq!(
+        format_number(5.9996 / 86_400.0, "hh:mm:ss.000", locale).text,
+        "00:00:06.000"
+    );
+    assert_eq!(
+        format_number(59.9996 / 86_400.0, "hh:mm:ss.000", locale).text,
+        "00:01:00.000"
+    );
+    assert_eq!(
+        format_number(3599.9996 / 86_400.0, "hh:mm:ss.000", locale).text,
+        "01:00:00.000"
+    );
+    assert_eq!(
+        format_number(
+            45331.0 + 86_399.9996 / 86_400.0,
+            "yyyy-mm-dd hh:mm:ss.000",
+            locale
+        )
+        .text,
+        "2024-02-10 00:00:00.000"
+    );
+}
+
+#[test]
+fn fractional_seconds_elapsed_and_unchanged() {
+    let locale = get_default_locale();
+    assert_eq!(
+        format_number(1.5 + 12.345 / 86_400.0, "[h]:mm:ss.000", locale).text,
+        "36:00:12.345"
+    );
+    assert_eq!(
+        format_number((36.0 * 3600.0 - 0.0004) / 86_400.0, "[h]:mm:ss.000", locale).text,
+        "36:00:00.000"
+    );
+    assert_eq!(
+        format_number(1.234 / 86_400.0, "[s].000", locale).text,
+        "1.234"
+    );
+    assert_eq!(
+        format_number(45331.417007951401, "yyyy-mm-dd hh:mm:ss", locale).text,
+        "2024-02-09 10:00:29"
+    );
+}
+
+#[test]
+fn fractional_seconds_locale_and_errors() {
+    let fr = get_locale("fr").unwrap();
+    assert_eq!(
+        format_number(45331.417007951401, "hh:mm:ss.000", fr).text,
+        "10:00:29,487"
+    );
+
+    let en = get_default_locale();
+    assert!(format_number(1.0, "hh:mm.00", en).error.is_some());
+    assert!(format_number(1.0, "ss.0000", en).error.is_some());
+    assert!(format_number(1.0, "ss.0#", en).error.is_some());
+    assert!(format_number(1.0, "yyyy-mm-dd 0.00", en).error.is_some());
+}
