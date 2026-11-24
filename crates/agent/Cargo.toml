@@ -27,6 +27,7 @@ tracing = "0.1"
 which = "8"
 zenkai-datagen = { path = "../datagen" }
 zenkai-engine = { path = "../engine" }
+zenkai-formats = { path = "../formats" }
 zenkai-i18n = { path = "../i18n" }
 zenkai-types = { path = "../types" }
 

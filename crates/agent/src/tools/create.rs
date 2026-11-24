@@ -9,7 +9,7 @@ use crate::tools::folder::{InsidePath, WorkingFolder};
 
 pub const MAX_NEW_SHEETS: usize = 50;
 const WORKBOOK_EXTENSION: &str = "xlsx";
-pub const OPENABLE_EXTENSIONS: [&str; 5] = ["xlsx", "xlsm", "xls", "xlsb", "ods"];
+pub const OPENABLE_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewWorkbook {
@@ -185,11 +185,13 @@ mod tests {
     #[test]
     fn only_existing_spreadsheet_files_can_be_opened() {
         let (_temp, folder) = folder();
-        std::fs::write(folder.path().join("data.csv"), b"a,b").unwrap();
+        std::fs::write(folder.path().join("notes.txt"), b"a,b").unwrap();
+        std::fs::write(folder.path().join("data.csv"), b"a,b\n1,2\n").unwrap();
+        std::fs::write(folder.path().join("data.TSV"), b"a\tb\n1\t2\n").unwrap();
         std::fs::create_dir(folder.path().join("folder.xlsx")).unwrap();
         let check = |path: &str| check_openable(&folder.resolve(path).unwrap());
         assert!(matches!(
-            check("data.csv"),
+            check("notes.txt"),
             Err(ToolError::NotOpenableFile(_))
         ));
         assert!(matches!(
@@ -200,6 +202,9 @@ mod tests {
             check("gone.xlsx"),
             Err(ToolError::FileNotFound(_))
         ));
+        assert!(matches!(check("gone.csv"), Err(ToolError::FileNotFound(_))));
+        assert!(check("data.csv").is_ok());
+        assert!(check("data.TSV").is_ok());
         let request = new(&folder, "real.xlsx", &[]).unwrap();
         create_workbook_file(&request).unwrap();
         assert!(check("real.xlsx").is_ok());
