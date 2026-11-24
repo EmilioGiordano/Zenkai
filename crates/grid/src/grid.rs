@@ -1879,8 +1879,8 @@ fn wheel_steps(remainder: f32, delta: f32) -> (i64, f32) {
 // Shift turns a vertical wheel into a horizontal one; a wheel that already sends a horizontal
 // delta, as Windows does for shift, keeps it.
 fn wheel_axes(rows: f32, cols: f32, shift: bool) -> (f32, f32) {
-    if shift && cols == 0.0 {
-        (0.0, rows)
+    if shift {
+        (0.0, cols + rows)
     } else {
         (rows, cols)
     }
@@ -2068,6 +2068,11 @@ mod tests {
     #[test]
     fn shift_keeps_a_horizontal_delta_as_columns() {
         assert_eq!(wheel_axes(0.0, 2.0, true), (0.0, 2.0));
+    }
+
+    #[test]
+    fn shift_sends_a_diagonal_wheel_to_columns_only() {
+        assert_eq!(wheel_axes(3.0, 0.25, true), (0.0, 3.25));
     }
 
     #[test]
