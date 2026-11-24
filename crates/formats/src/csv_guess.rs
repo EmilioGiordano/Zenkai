@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::csv_format::{Delimiter, ParsedCsv};
@@ -27,6 +29,18 @@ pub fn apply(decimal_mark: DecimalMark, date_order: DateOrder, rows: &mut [Vec<S
     }
     if decimal_mark == DecimalMark::Comma {
         normalize_decimal_comma(rows);
+    }
+}
+
+// The engine reads a leading '+' or '-' as a formula unless it parses as a number;
+// an apostrophe forces non-numeric signed fields to stay text on import.
+pub fn import_input(field: &str) -> Cow<'_, str> {
+    let signed_text =
+        field.starts_with(['+', '-']) && number_value(field).is_none_or(|value| !value.is_finite());
+    if signed_text {
+        Cow::Owned(format!("'{field}"))
+    } else {
+        Cow::Borrowed(field)
     }
 }
 
@@ -121,5 +135,48 @@ mod tests {
         let guessed = guess(&parsed);
         assert_eq!(guessed.decimal_mark, DecimalMark::Dot);
         assert_eq!(guessed.date_order, DateOrder::MonthFirst);
+    }
+
+    #[test]
+    fn signed_non_numbers_become_text_and_numbers_and_formulas_stay() {
+        for field in [
+            "+34 600",
+            "-abc",
+            "+x",
+            "-",
+            "+",
+            "-3,5",
+            "-1+2",
+            "+SUM(A1:A3)",
+        ] {
+            assert_eq!(import_input(field).into_owned(), format!("'{field}"));
+        }
+        for field in ["+5", "-3.5", "-12%", "-1,234.5", "-$5", "-\u{20ac}5"] {
+            assert_eq!(import_input(field).as_ref(), field, "{field}");
+        }
+        for field in ["=1+1", "hello", ""] {
+            assert_eq!(import_input(field).as_ref(), field, "{field}");
+        }
+    }
+
+    #[test]
+    fn a_signed_decimal_comma_number_stays_a_number_after_apply() {
+        let mut rows = vec![vec![
+            "-3,5".to_string(),
+            "-1.234,5".to_string(),
+            "-12,5%".to_string(),
+            "+34 600".to_string(),
+            "-".to_string(),
+            "+5".to_string(),
+        ]];
+        apply(DecimalMark::Comma, DateOrder::DayFirst, &mut rows);
+        let inputs: Vec<String> = rows[0]
+            .iter()
+            .map(|field| import_input(field).into_owned())
+            .collect();
+        assert_eq!(
+            inputs,
+            ["-3.5", "-1234.5", "-12.5%", "'+34 600", "'-", "+5"]
+        );
     }
 }

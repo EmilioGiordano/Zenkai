@@ -348,7 +348,7 @@ pub(crate) mod tests {
 
     use zenkai_engine::Engine;
     use zenkai_formats::Delimiter;
-    use zenkai_types::{ColIdx, Range};
+    use zenkai_types::{ColIdx, Range, ValueKind};
 
     use super::*;
     use crate::entry::CsvLoad;
@@ -1470,5 +1470,35 @@ pub(crate) mod tests {
         let (saved, bytes) = save(&path, load.workbook, &csv);
         assert!(matches!(saved, CsvSave::Written(..)));
         assert_eq!(bytes, b"9,2,\n");
+    }
+
+    #[test]
+    fn signed_text_opens_as_text_signed_numbers_stay_numbers_and_unedited_save_keeps_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = b"phone;dash;plus;neg\n+34 600;-;+5;-1,5\n";
+        let (path, mut load) = opened_csv(dir.path(), "signed.csv", original);
+        let csv = load.csv.take().unwrap();
+
+        let phone = load.workbook.cell(SheetId(0), at(1, 0));
+        assert_eq!(phone.text, "+34 600");
+        assert_eq!(phone.kind, ValueKind::Text);
+        assert_eq!(phone.number, None);
+
+        let dash = load.workbook.cell(SheetId(0), at(1, 1));
+        assert_eq!(dash.text, "-");
+        assert_eq!(dash.kind, ValueKind::Text);
+        assert_eq!(dash.number, None);
+
+        let plus = load.workbook.cell(SheetId(0), at(1, 2));
+        assert_eq!(plus.kind, ValueKind::Number);
+        assert_eq!(plus.number, Some(5.0));
+
+        let neg = load.workbook.cell(SheetId(0), at(1, 3));
+        assert_eq!(neg.kind, ValueKind::Number);
+        assert_eq!(neg.number, Some(-1.5));
+
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, original);
     }
 }

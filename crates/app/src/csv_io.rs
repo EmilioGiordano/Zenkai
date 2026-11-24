@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::RwLock;
@@ -9,7 +10,7 @@ use zenkai_engine::{
 };
 use zenkai_formats::{
     CsvError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv, apply, guess,
-    parse_csv,
+    import_input, parse_csv,
 };
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, MAX_ROWS, RowIdx, SheetId};
@@ -161,7 +162,16 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
     })
 }
 
-pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
+pub fn workbook_from_rows(mut rows: Vec<Vec<String>>) -> Result<Workbook, String> {
+    for field in rows.iter_mut().flatten() {
+        let rewritten = match import_input(field) {
+            Cow::Owned(text) => Some(text),
+            Cow::Borrowed(_) => None,
+        };
+        if let Some(text) = rewritten {
+            *field = text;
+        }
+    }
     run_with_engine_stack(move || {
         let mut workbook = Workbook::new_empty()?;
         workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
