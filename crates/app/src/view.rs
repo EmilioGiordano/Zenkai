@@ -4687,6 +4687,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &OpenReleases, window, cx| this.open_releases(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &OpenInstallPage, window, cx| {
+                this.open_install_page(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ShowWhatsNew, window, cx| this.show_whats_new(window, cx)),
             )

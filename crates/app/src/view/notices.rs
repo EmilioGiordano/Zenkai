@@ -41,6 +41,8 @@ pub(super) enum NoticeKind {
     #[cfg(windows)]
     UpdateBlocked(Version),
     #[cfg(windows)]
+    UpdateNotInstalled,
+    #[cfg(windows)]
     Updated(Version),
 }
 
@@ -75,6 +77,17 @@ impl Notice {
             return true;
         }
         self.is_update_available()
+    }
+
+    pub fn leads_to_install_page(&self) -> bool {
+        #[cfg(windows)]
+        {
+            matches!(self.kind, NoticeKind::UpdateNotInstalled)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 
     pub fn is_update(&self) -> bool {
@@ -810,5 +823,21 @@ a.xlsx: Access denied (os error 5)",
         assert_eq!(card_text(&notices).as_deref(), Some("Disk full"));
         notices.dismiss_card();
         assert!(notices.card().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_uninstalled_update_card_leads_to_the_install_page_and_not_releases() {
+        let mut notices = Notices::default();
+        notices.post_update(
+            NoticeKind::UpdateNotInstalled,
+            "Install Zenkai".into(),
+            "12:00:00".into(),
+        );
+        let card = notices.card().unwrap();
+        assert!(card.is_update());
+        assert!(card.leads_to_install_page());
+        assert!(!card.leads_to_releases());
+        assert_eq!(notices.take_shown_update(), None);
     }
 }

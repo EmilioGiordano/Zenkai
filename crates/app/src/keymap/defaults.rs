@@ -275,6 +275,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-c", CancelUpdate, Some("NoticeCard")),
         bind("alt-r", RestartToUpdate, Some("NoticeCard")),
         bind("alt-o", OpenReleases, Some("NoticeCard")),
+        bind("alt-i", OpenInstallPage, Some("NoticeCard")),
         bind("ctrl-shift-j", ShowMessages, CONTEXT),
         bind("escape", CloseMessages, Some("MessagesPanel")),
         bind("down", NextMessage, Some("MessagesPanel")),

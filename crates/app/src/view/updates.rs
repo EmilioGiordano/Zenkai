@@ -8,7 +8,7 @@ use super::notices::{Lifetime, NoticeKind, Severity};
 use crate::close_prompt::CloseGoal;
 #[cfg(windows)]
 use crate::close_prompt::CloseRoom;
-use crate::updates::{self, LauncherNotice, Report, Version};
+use crate::updates::{self, CannotSelfUpdate, LauncherNotice, Report, SelfUpdate, Version};
 #[cfg(windows)]
 use crate::updates::{Blocked, DownloadOutcome, DownloadPhase, StageError};
 
@@ -88,12 +88,56 @@ impl Workspace {
     }
 
     pub(super) fn update_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match updates::update_known(cx) {
-            None => self.notify(Severity::Info, t!("update.none_available"), cx),
-            #[cfg(windows)]
-            Some(version) if updates::can_download() => self.download_update(version, cx),
-            Some(_) => self.open_releases(window, cx),
+        let Some(version) = updates::update_known(cx) else {
+            self.notify(Severity::Info, t!("update.none_available"), cx);
+            return;
+        };
+        match updates::self_update() {
+            SelfUpdate::Available => self.start_self_update(version, window, cx),
+            SelfUpdate::Unavailable {
+                reason,
+                current_exe,
+                install_root,
+            } => {
+                tracing::info!(
+                    ?reason,
+                    %version,
+                    ?current_exe,
+                    ?install_root,
+                    "cannot install update from this copy"
+                );
+                match reason {
+                    CannotSelfUpdate::NotInstalled => self.show_not_installed_update(window, cx),
+                    CannotSelfUpdate::NoTrustedKey | CannotSelfUpdate::NotWindows => {
+                        self.open_releases(window, cx);
+                    }
+                }
+            }
         }
+    }
+
+    #[cfg(windows)]
+    fn start_self_update(&mut self, version: Version, _: &mut Window, cx: &mut Context<Self>) {
+        self.download_update(version, cx);
+    }
+
+    #[cfg(not(windows))]
+    fn start_self_update(&mut self, _: Version, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_releases(window, cx);
+    }
+
+    #[cfg(windows)]
+    fn show_not_installed_update(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.post_update_card(
+            NoticeKind::UpdateNotInstalled,
+            t!("update.not_installed"),
+            cx,
+        );
+    }
+
+    #[cfg(not(windows))]
+    fn show_not_installed_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_releases(window, cx);
     }
 
     #[cfg(windows)]
@@ -337,6 +381,17 @@ impl Workspace {
             .card()
             .is_some_and(|card| card.leads_to_releases());
         self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
+        if on_card {
+            self.dismiss_notice(window, cx);
+        }
+    }
+
+    pub(super) fn open_install_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let on_card = self
+            .notices
+            .card()
+            .is_some_and(|card| card.leads_to_install_page());
+        self.confirm_web_link(updates::INSTALL_PAGE.to_owned(), window, cx);
         if on_card {
             self.dismiss_notice(window, cx);
         }

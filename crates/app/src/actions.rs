@@ -261,6 +261,7 @@ actions!(
         CancelUpdate,
         RestartToUpdate,
         OpenReleases,
+        OpenInstallPage,
         CheckForUpdates,
         ShowWhatsNew,
         ShowMessages,
