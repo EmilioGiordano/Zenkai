@@ -92,52 +92,25 @@ impl Workspace {
             self.notify(Severity::Info, t!("update.none_available"), cx);
             return;
         };
+        #[cfg(not(windows))]
+        let _ = version;
         match updates::self_update() {
-            SelfUpdate::Available => self.start_self_update(version, window, cx),
+            #[cfg(windows)]
+            SelfUpdate::Available => self.download_update(version, cx),
+            #[cfg(windows)]
             SelfUpdate::Unavailable {
-                reason,
-                current_exe,
-                install_root,
-            } => {
-                tracing::info!(
-                    ?reason,
-                    %version,
-                    ?current_exe,
-                    ?install_root,
-                    "cannot install update from this copy"
-                );
-                match reason {
-                    CannotSelfUpdate::NotInstalled => self.show_not_installed_update(window, cx),
-                    CannotSelfUpdate::NoTrustedKey | CannotSelfUpdate::NotWindows => {
-                        self.open_releases(window, cx);
-                    }
-                }
-            }
+                reason: CannotSelfUpdate::NotInstalled,
+            } => self.post_update_card(
+                NoticeKind::UpdateNotInstalled,
+                t!("update.not_installed"),
+                cx,
+            ),
+            SelfUpdate::Unavailable {
+                reason: CannotSelfUpdate::NoTrustedKey | CannotSelfUpdate::NotWindows,
+            } => self.open_releases(window, cx),
+            #[cfg(not(windows))]
+            _ => self.open_releases(window, cx),
         }
-    }
-
-    #[cfg(windows)]
-    fn start_self_update(&mut self, version: Version, _: &mut Window, cx: &mut Context<Self>) {
-        self.download_update(version, cx);
-    }
-
-    #[cfg(not(windows))]
-    fn start_self_update(&mut self, _: Version, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_releases(window, cx);
-    }
-
-    #[cfg(windows)]
-    fn show_not_installed_update(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.post_update_card(
-            NoticeKind::UpdateNotInstalled,
-            t!("update.not_installed"),
-            cx,
-        );
-    }
-
-    #[cfg(not(windows))]
-    fn show_not_installed_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_releases(window, cx);
     }
 
     #[cfg(windows)]

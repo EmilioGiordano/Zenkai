@@ -21,7 +21,6 @@ mod store;
 mod transfer;
 mod version;
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -58,52 +57,44 @@ pub enum CannotSelfUpdate {
     NoTrustedKey,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SelfUpdate {
     Available,
-    Unavailable {
-        reason: CannotSelfUpdate,
-        current_exe: Option<PathBuf>,
-        install_root: Option<PathBuf>,
-    },
+    Unavailable { reason: CannotSelfUpdate },
 }
 
 pub fn self_update() -> SelfUpdate {
-    let current_exe = match std::env::current_exe() {
-        Ok(path) => Some(path),
-        Err(error) => {
-            tracing::warn!(%error, "could not find this executable");
-            None
-        }
-    };
-    let install_root = crate::installation::root().map(Path::to_path_buf);
+    let install_root = crate::installation::root();
     #[cfg(windows)]
     let has_trusted_key = signature::has_trusted_key();
     #[cfg(not(windows))]
     let has_trusted_key = false;
-    decide_self_update(cfg!(windows), current_exe, install_root, has_trusted_key)
+    let decision = decide_self_update(cfg!(windows), install_root.is_some(), has_trusted_key);
+    if let SelfUpdate::Unavailable { reason } = decision {
+        let current_exe = std::env::current_exe()
+            .inspect_err(|error| tracing::warn!(%error, "could not find this executable"))
+            .ok();
+        tracing::info!(
+            ?reason,
+            ?current_exe,
+            ?install_root,
+            "cannot install update from this copy"
+        );
+    }
+    decision
 }
 
-fn decide_self_update(
-    is_windows: bool,
-    current_exe: Option<PathBuf>,
-    install_root: Option<PathBuf>,
-    has_trusted_key: bool,
-) -> SelfUpdate {
+fn decide_self_update(is_windows: bool, is_installed: bool, has_trusted_key: bool) -> SelfUpdate {
     let reason = if !is_windows {
         CannotSelfUpdate::NotWindows
-    } else if current_exe.is_none() || install_root.is_none() {
+    } else if !is_installed {
         CannotSelfUpdate::NotInstalled
     } else if !has_trusted_key {
         CannotSelfUpdate::NoTrustedKey
     } else {
         return SelfUpdate::Available;
     };
-    SelfUpdate::Unavailable {
-        reason,
-        current_exe,
-        install_root,
-    }
+    SelfUpdate::Unavailable { reason }
 }
 
 impl Global for Updates {}
@@ -270,97 +261,45 @@ fn save_in_background(snapshot: Snapshot, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::{CannotSelfUpdate, SelfUpdate, decide_self_update};
 
     #[test]
     fn an_installed_windows_copy_with_a_trusted_key_can_self_update() {
-        let decision = decide_self_update(
-            true,
-            Some(PathBuf::from(
-                r"C:\Users\me\AppData\Local\Zenkai\app\zenkai.exe",
-            )),
-            Some(PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai")),
-            true,
-        );
-        assert_eq!(decision, SelfUpdate::Available);
+        assert_eq!(decide_self_update(true, true, true), SelfUpdate::Available);
     }
 
     #[test]
     fn a_copy_without_an_install_root_cannot_self_update() {
-        let desktop = PathBuf::from(r"C:\Users\me\Desktop\zenkai.exe");
         assert_eq!(
-            decide_self_update(true, Some(desktop.clone()), None, true),
+            decide_self_update(true, false, true),
             SelfUpdate::Unavailable {
                 reason: CannotSelfUpdate::NotInstalled,
-                current_exe: Some(desktop.clone()),
-                install_root: None,
             }
         );
         assert_eq!(
-            decide_self_update(true, Some(desktop.clone()), None, false),
+            decide_self_update(true, false, false),
             SelfUpdate::Unavailable {
                 reason: CannotSelfUpdate::NotInstalled,
-                current_exe: Some(desktop),
-                install_root: None,
-            }
-        );
-    }
-
-    #[test]
-    fn a_copy_without_a_resolved_executable_cannot_self_update() {
-        let root = PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai");
-        assert_eq!(
-            decide_self_update(true, None, None, true),
-            SelfUpdate::Unavailable {
-                reason: CannotSelfUpdate::NotInstalled,
-                current_exe: None,
-                install_root: None,
-            }
-        );
-        assert_eq!(
-            decide_self_update(true, None, Some(root.clone()), true),
-            SelfUpdate::Unavailable {
-                reason: CannotSelfUpdate::NotInstalled,
-                current_exe: None,
-                install_root: Some(root),
             }
         );
     }
 
     #[test]
     fn an_installed_copy_without_a_trusted_key_cannot_self_update() {
-        let running = PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai\app\zenkai.exe");
-        let root = PathBuf::from(r"C:\Users\me\AppData\Local\Zenkai");
         assert_eq!(
-            decide_self_update(true, Some(running.clone()), Some(root.clone()), false),
+            decide_self_update(true, true, false),
             SelfUpdate::Unavailable {
                 reason: CannotSelfUpdate::NoTrustedKey,
-                current_exe: Some(running),
-                install_root: Some(root),
             }
         );
     }
 
     #[test]
     fn non_windows_builds_cannot_self_update() {
-        let running = PathBuf::from("/usr/local/bin/zenkai");
-        let root = PathBuf::from("/usr/local");
         assert_eq!(
-            decide_self_update(false, Some(running.clone()), Some(root.clone()), true),
+            decide_self_update(false, false, false),
             SelfUpdate::Unavailable {
                 reason: CannotSelfUpdate::NotWindows,
-                current_exe: Some(running.clone()),
-                install_root: Some(root),
-            }
-        );
-        assert_eq!(
-            decide_self_update(false, Some(running.clone()), None, false),
-            SelfUpdate::Unavailable {
-                reason: CannotSelfUpdate::NotWindows,
-                current_exe: Some(running),
-                install_root: None,
             }
         );
     }
