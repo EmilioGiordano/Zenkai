@@ -18,6 +18,7 @@ const SCROLL_LINE: f32 = 40.0;
 
 pub enum NotesEvent {
     OpenLink(String),
+    UpdateNow,
 }
 
 // `texts[section][block]` is the text of that block, kept as a shared string so drawing it

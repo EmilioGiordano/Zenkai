@@ -42,6 +42,7 @@ impl Workspace {
     fn on_notes_event(&mut self, event: &NotesEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             NotesEvent::OpenLink(link) => self.confirm_vetted_link(link, window, cx),
+            NotesEvent::UpdateNow => self.update_now(window, cx),
         }
     }
 
