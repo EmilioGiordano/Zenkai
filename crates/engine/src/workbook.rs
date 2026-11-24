@@ -2285,7 +2285,9 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
     }
 }
 
-fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
+pub(crate) fn engine_model(
+    book: ironcalc::base::types::Workbook,
+) -> Result<Model<'static>, EngineError> {
     Model::from_workbook(book, LANGUAGE).map_err(model_error)
 }
 
@@ -2340,7 +2342,7 @@ fn warmed(
     workbook
 }
 
-fn carried_by_position(model: &Model<'_>, settings: Vec<SheetSettings>) -> Carried {
+pub(crate) fn carried_by_position(model: &Model<'_>, settings: Vec<SheetSettings>) -> Carried {
     let ids: Vec<u32> = model
         .workbook
         .worksheets

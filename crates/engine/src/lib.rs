@@ -12,6 +12,7 @@ mod held;
 mod hibernation;
 mod inputs_plan;
 mod model;
+mod original_file;
 mod preflight;
 #[cfg(test)]
 mod ragged_inputs;
@@ -43,6 +44,7 @@ pub use file::{
 };
 pub use hibernation::{Kept, MAX_DUMP_BYTES};
 pub use model::FormatEdits;
+pub use original_file::OriginalFile;
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use saved::Stamp;
