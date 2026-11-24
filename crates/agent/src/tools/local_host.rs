@@ -3,8 +3,8 @@ use std::io::ErrorKind;
 use async_channel::Receiver;
 use zenkai_engine::{Engine, Workbook, open_xlsx, workbook_from_rows};
 use zenkai_formats::{
-    CsvError, CsvReadError, MAX_CSV_BYTES, apply, guess, parse_csv, prepare_import_inputs,
-    read_csv_bytes, tsv_delimiter,
+    CsvReadError, MAX_CSV_BYTES, apply, guess, parse_csv, prepare_import_inputs, read_csv_bytes,
+    tsv_delimiter,
 };
 use zenkai_types::{Range, SheetId, WorkbookId};
 
@@ -119,10 +119,7 @@ fn open_csv(path: &InsidePath) -> Result<Workbook, ToolError> {
         CsvReadError::Io(source) if source.kind() == ErrorKind::NotFound => {
             ToolError::FileNotFound(relative_text(path))
         }
-        CsvReadError::Io(source) => ToolError::File(source.to_string()),
-        CsvReadError::TooLarge(megabytes) => {
-            ToolError::File(CsvError::TooLarge(megabytes).to_string())
-        }
+        other => ToolError::File(other.to_string()),
     })?;
     let parsed = parse_csv(&bytes, tsv_delimiter(path.path()))
         .map_err(|error| ToolError::File(error.to_string()))?;

@@ -32,9 +32,7 @@ fn into_engine_error(error: CsvReadError, path: &Path) -> EngineError {
             path: path.to_path_buf(),
             source,
         },
-        CsvReadError::TooLarge(megabytes) => {
-            EngineError::Rejected(CsvError::TooLarge(megabytes).to_string())
-        }
+        too_large @ CsvReadError::TooLarge(_) => EngineError::Rejected(too_large.to_string()),
     }
 }
 

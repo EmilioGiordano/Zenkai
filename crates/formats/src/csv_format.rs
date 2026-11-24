@@ -353,9 +353,11 @@ fn count_outside_quotes(line: &str, delimiter: char) -> usize {
         .count()
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CsvReadError {
-    Io(std::io::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("the file is {0} MB, larger than the 512 MB supported for CSV")]
     TooLarge(usize),
 }
 
@@ -368,16 +370,14 @@ pub fn tsv_delimiter(path: &Path) -> Option<Delimiter> {
 // The size is checked on the open file and the read is capped too, so a file that grows
 // meanwhile cannot fill memory.
 pub fn read_csv_bytes(path: &Path, limit: usize) -> Result<Vec<u8>, CsvReadError> {
-    let file = std::fs::File::open(path).map_err(CsvReadError::Io)?;
-    let length = file.metadata().map_err(CsvReadError::Io)?.len();
+    let file = std::fs::File::open(path)?;
+    let length = file.metadata()?.len();
     let megabytes = |bytes: u64| usize::try_from(bytes / 1024 / 1024).unwrap_or(usize::MAX);
     if length > limit as u64 {
         return Err(CsvReadError::TooLarge(megabytes(length)));
     }
     let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or_default());
-    file.take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(CsvReadError::Io)?;
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > limit {
         return Err(CsvReadError::TooLarge(megabytes(bytes.len() as u64)));
     }
@@ -663,6 +663,14 @@ mod tests {
             read_csv_bytes(&dir.path().join("missing.csv"), 8),
             Err(CsvReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
         ));
+    }
+
+    #[test]
+    fn a_read_refused_for_size_says_what_a_parse_refused_for_size_says() {
+        assert_eq!(
+            CsvReadError::TooLarge(600).to_string(),
+            CsvError::TooLarge(600).to_string()
+        );
     }
 }
 
