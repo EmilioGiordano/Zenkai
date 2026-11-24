@@ -10004,7 +10004,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "chrono",
@@ -10047,7 +10047,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent-client-protocol",
  "async-channel",
@@ -10079,7 +10079,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-bench"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "calamine",
@@ -10101,7 +10101,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-datagen"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "proptest",
  "schemars 1.2.2",
@@ -10113,7 +10113,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crc32fast",
  "csv",
@@ -10133,7 +10133,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-fake-acp-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent-client-protocol",
  "async-channel",
@@ -10145,7 +10145,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-formats"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "calamine",
  "csv",
@@ -10160,7 +10160,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-grid"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "gpui-kit",
  "proptest",
@@ -10170,7 +10170,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-i18n"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -10191,7 +10191,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-mcp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "interprocess",
  "serde_json",
@@ -10203,7 +10203,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-pdf-host"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "pdfium-render",
@@ -10218,7 +10218,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-types"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -10243,7 +10243,7 @@ dependencies = [
 
 [[package]]
 name = "zenkai-xlsx-reader"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crc32fast",
  "ironcalc",
