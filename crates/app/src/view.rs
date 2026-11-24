@@ -64,7 +64,7 @@ use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_export_size::ExportSize;
 use crate::csv_io;
-use crate::csv_options::{CsvBinding, CsvOptions};
+use crate::csv_options::CsvOptions;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -1641,11 +1641,10 @@ impl Workspace {
                             this.switch_to(open, window, cx);
                             return;
                         }
-                        let sheet = workbook.sheet_key(SheetId(0));
                         let id = this.open_document(workbook, Some(path), Vec::new(), window, cx);
                         if let Some(document) = this.documents.get_mut(id) {
                             document.origin = origin;
-                            document.csv = Some(CsvBinding::new(options).with_sheet(sheet));
+                            document.bind_csv(options);
                             document.guard_file(seen);
                         }
                         this.notify(Severity::Info, summary, cx);

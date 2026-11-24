@@ -343,7 +343,7 @@ pub fn save_csv_file(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::Path;
 
     use zenkai_engine::Engine;
@@ -1247,6 +1247,49 @@ mod tests {
         assert!(bytes.starts_with(top.as_bytes()));
         assert_eq!(bytes.len(), top.len() + (rows - 11));
         assert!(bytes[top.len()..].iter().all(|byte| *byte == b'\n'));
+    }
+
+    pub(crate) const SALES: &[u8] = b"id;nombre;precio;fecha\r\n007;Caf\xe9;1.234,50;25/10/2026\r\n9780201379624;T\xe9;12,345%;08/01/2026\r\n00123;Pan;3,5;31/12/2026\r\n";
+
+    #[test]
+    fn a_file_opened_through_the_preview_saves_without_a_prompt_and_without_a_byte_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ventas.csv");
+        std::fs::write(&path, SALES).unwrap();
+        let read = csv_io::read_csv(&path).unwrap();
+        let guessed = zenkai_formats::guess(&read.parsed);
+        let options = CsvOptions::from_read(&read.parsed, &guessed);
+        let mut rows = read.parsed.rows;
+        zenkai_formats::apply(options.decimal_mark, options.date_order, &mut rows);
+        let workbook = csv_io::workbook_from_rows(rows).unwrap();
+        let mut document = crate::document::Document::new(
+            zenkai_types::WorkbookId(0),
+            crate::spaces::SpaceId(0),
+            1,
+            workbook,
+            Some(path.clone()),
+            Vec::new(),
+        );
+        document.bind_csv(options);
+        document.guard_file(read.seen);
+        let generation = document.generation();
+        assert!(document.finish_batch(generation));
+        let binding = document.csv.clone().unwrap();
+        assert!(!binding.introduced.any());
+        assert!(binding.log.is_empty());
+        let asked = CsvSaveRequest {
+            path: path.clone(),
+            binding,
+            sheets: 1,
+            sheet: SheetId(0),
+            changed: ChangedFile::Ask,
+            large: LargeWrite::Ask,
+            guard: document.file_guard(),
+        };
+        let shared = document.shared_workbook();
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), SALES);
     }
 
     #[test]

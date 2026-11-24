@@ -165,6 +165,7 @@ impl Loaded {
         }
         if let Some(binding) = rebuilt_csv_binding(self.csv.as_ref(), link, self.provenance) {
             document.csv = Some(binding);
+            document.baseline_csv();
             if let Some(csv) = &self.csv {
                 document.guard_file(csv.seen);
             }

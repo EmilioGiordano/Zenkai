@@ -2539,6 +2539,27 @@ mod tests {
     }
 
     #[test]
+    fn what_building_a_workbook_did_is_forgotten_and_only_what_follows_counts() {
+        let sheet = SheetId(0);
+        let a1 = CellPos::default();
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_inputs(
+            sheet,
+            a1,
+            &[vec!["12.345%".to_string(), "2026-10-25".to_string()]],
+        )
+        .unwrap();
+        book.apply_style(sheet, Range::single(a1), StyleChange::Bold(true))
+            .unwrap();
+        book.forget_changes();
+        assert_eq!(book.format_edits(), crate::model::FormatEdits::default());
+        assert_eq!(book.changes_since(0), Some(Vec::new()));
+        book.set_column_width(sheet, ColIdx::clamped(0), 90.0)
+            .unwrap();
+        assert_eq!(counts(&book), (0, 1, 0));
+    }
+
+    #[test]
     fn a_copy_of_a_sheet_makes_the_log_unknown_as_a_deleted_one_does() {
         let mut book = Workbook::new_empty().unwrap();
         book.duplicate_sheet(SheetId(0)).unwrap();

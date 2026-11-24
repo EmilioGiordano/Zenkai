@@ -570,6 +570,47 @@ mod tests {
     }
 
     #[test]
+    fn a_file_restored_from_the_session_saves_without_a_prompt_and_without_a_byte_changed() {
+        use crate::csv_io;
+        use crate::csv_save::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
+        use crate::document::ChangedFile;
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ventas.csv");
+        std::fs::write(&path, crate::csv_save::tests::SALES).unwrap();
+        let first = csv_io::load_csv(&path, None).unwrap();
+        let options = first.csv.as_ref().unwrap().options;
+        let stored = serde_json::to_string(&CsvBinding::new(options)).unwrap();
+        let mut record = file(Some(path.to_str().unwrap()), true);
+        record.csv = Some(serde_json::from_str(&stored).unwrap());
+
+        let mut documents = documents();
+        let id = documents.restore(&session_with(record), None).unwrap();
+        let read = csv_io::load_csv(&path, Some(options)).unwrap();
+        let mut woken = loaded(id);
+        woken.workbook = read.workbook;
+        woken.csv = read.csv;
+        documents.install(woken);
+        let document = documents.active().unwrap();
+        let binding = document.csv.clone().unwrap();
+        assert!(!binding.introduced.any());
+        let asked = CsvSaveRequest {
+            path: path.clone(),
+            binding,
+            sheets: 1,
+            sheet: SheetId(0),
+            changed: ChangedFile::Ask,
+            large: LargeWrite::Ask,
+            guard: document.file_guard(),
+        };
+        let shared = document.shared_workbook();
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), crate::csv_save::tests::SALES);
+    }
+
+    #[test]
     fn a_document_with_a_delimited_path_is_always_a_csv_with_options_still_to_find() {
         let mut documents = documents();
         let id = open_file(&mut documents, "export.tsv");

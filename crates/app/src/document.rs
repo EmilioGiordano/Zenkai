@@ -13,7 +13,7 @@ use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, LoggedChange, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
-use crate::csv_options::CsvBinding;
+use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
@@ -497,6 +497,26 @@ impl Document {
             Ok(workbook) => Some(read(&workbook)),
             Err(TryLockError::WouldBlock) => None,
             Err(TryLockError::Poisoned(poisoned)) => Some(read(&poisoned.into_inner())),
+        }
+    }
+
+    // The document is the CSV file read with these options. What the reading itself did to the
+    // workbook is the baseline, so only what the user does after it counts as an edit.
+    pub fn bind_csv(&mut self, options: CsvOptions) {
+        let sheet = self
+            .workbook()
+            .and_then(|workbook| workbook.sheet_key(SheetId(0)));
+        self.csv = Some(CsvBinding::new(options).with_sheet(sheet));
+        self.baseline_csv();
+    }
+
+    // The engine's counters now are what the binding has seen.
+    pub fn baseline_csv(&mut self) {
+        let Some(edits) = self.workbook().map(|workbook| workbook.format_edits()) else {
+            return;
+        };
+        if let Some(binding) = self.csv.as_mut() {
+            binding.seen_edits = edits;
         }
     }
 
@@ -1094,6 +1114,32 @@ mod tests {
         let held = shared.write().unwrap();
         assert!(document.settled_csv().unwrap().log.has_lost());
         drop(held);
+    }
+
+    #[test]
+    fn what_the_reading_did_is_the_baseline_and_only_what_follows_is_an_edit() {
+        use zenkai_engine::Engine;
+        let sheet = SheetId(0);
+        let mut document = document();
+        let generation = document.generation();
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
+            .unwrap();
+        document.bind_csv(CsvOptions::exported_as(zenkai_formats::Delimiter::Comma));
+        document.finish_batch(generation);
+        assert!(!document.csv.clone().unwrap().introduced.any());
+
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_row_height(sheet, zenkai_types::RowIdx::clamped(0), 40.0)
+            .unwrap();
+        document.finish_batch(generation);
+        assert!(document.csv.clone().unwrap().introduced.formatting);
     }
 
     #[test]
