@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2]
+
+### Spreadsheet
+
+- Date and time formats with fractional seconds, such as `yyyy-mm-dd hh:mm:ss.000`, show the
+  time as Excel does instead of `#VALUE!` ([#316](https://github.com/EmilioGiordano/Zenkai/issues/316)).
+- A CSV field that starts with `+` or `-` and is not a number, such as a phone number like
+  `+34 600 111 222`, opens as text instead of being read as a formula.
+
+### Updates
+
+- A copy of Zenkai that is not installed, such as a loose `zenkai.exe`, now says it cannot
+  update itself and points to getzenkai.com, instead of silently opening the Releases page.
+
 ### License
 
 - Zenkai is now licensed under AGPL-3.0-only. Versions 0.1.0 and 0.1.1 stay under Apache-2.0.
