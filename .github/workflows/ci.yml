@@ -45,9 +45,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Two commits so the vendor step can diff the merge commit against the base.
-          fetch-depth: 2
 
       - name: Install the toolchain from rust-toolchain.toml
         run: |
@@ -105,13 +102,50 @@ jobs:
         if: github.event_name == 'push'
         run: cargo test --workspace --no-run
 
-      - name: Test the vendored crates if the PR touches vendor
-        if: runner.os == 'Linux' && github.event_name == 'pull_request' && !github.event.pull_request.draft
+  # The vendored IronCalc crates are cargo projects of their own, so they build in parallel with
+  # their own cache. opt-level 2 keeps debug assertions and overflow checks but runs the suites fast.
+  vendor:
+    name: Vendor
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_PROFILE_DEV_OPT_LEVEL: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Two commits so a PR can diff its merge commit against the base.
+          fetch-depth: 2
+
+      - name: Find whether vendor/ changed
+        id: changed
         run: |
-          if git diff --name-only HEAD^1 HEAD | grep -q '^vendor/'; then
-            for manifest in vendor/ironcalc_base/Cargo.toml vendor/ironcalc/Cargo.toml; do
-              if [ -f "$manifest" ]; then
-                cargo test --manifest-path "$manifest"
-              fi
-            done
+          if [ "$GITHUB_EVENT_NAME" = push ] || ! git diff --quiet HEAD^1 HEAD -- vendor/; then
+            echo "vendor=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vendor=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Install the toolchain from rust-toolchain.toml
+        if: steps.changed.outputs.vendor == 'true'
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.changed.outputs.vendor == 'true'
+        with:
+          shared-key: vendor-ubuntu
+          workspaces: |
+            vendor/ironcalc_base -> target
+            vendor/ironcalc -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the vendored crates (build only on main, to warm the cache)
+        if: steps.changed.outputs.vendor == 'true'
+        run: |
+          flags=""
+          if [ "$GITHUB_EVENT_NAME" = push ]; then flags="--no-run"; fi
+          for manifest in vendor/ironcalc_base/Cargo.toml vendor/ironcalc/Cargo.toml; do
+            if [ -f "$manifest" ]; then
+              cargo test --manifest-path "$manifest" $flags
+            fi
+          done
