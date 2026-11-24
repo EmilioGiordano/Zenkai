@@ -12,7 +12,7 @@ machine: no account, no cloud.
 
 ## Install
 
-Download the latest build from [Releases](https://github.com/EmilioGiordano/Zenkai/releases).
+Download the latest build from [getzenkai.com](https://getzenkai.com) or [Releases](https://github.com/EmilioGiordano/Zenkai/releases).
 Windows is the main platform; Linux and macOS (Apple silicon) builds are experimental.
 
 On Windows, `zenkai-<version>-windows-x64-setup.exe` installs Zenkai for your user only, without
