@@ -1418,8 +1418,10 @@ impl Engine for Workbook {
                 if copied.styled {
                     self.model.count_copy_edit();
                 }
+                // Other cells' formulas that pointed into the cut range were rewritten too,
+                // and none of them is logged.
                 if cut {
-                    self.model.count_moved_edit();
+                    self.model.record_unknown();
                 }
             })
     }
@@ -2589,6 +2591,24 @@ mod tests {
         assert_eq!(book.format_edits().moved, 1);
         book.paste(sheet, c1, &copied, true).unwrap();
         assert_eq!(book.format_edits().moved, 2);
+    }
+
+    #[test]
+    fn a_cut_paste_makes_the_log_unknown_as_it_rewrites_cells_it_does_not_name() {
+        let sheet = SheetId(0);
+        let a1 = CellPos::default();
+        let c1 = CellPos::new(RowIdx::clamped(0), ColIdx::clamped(2));
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_inputs(sheet, a1, &[vec!["1".to_string()], vec!["=A1".to_string()]])
+            .unwrap();
+        book.forget_changes();
+        let copied = book.copy(sheet, Range::single(a1)).unwrap();
+        book.paste(sheet, c1, &copied, false).unwrap();
+        let after_copy = book.changes_since(0).unwrap();
+        assert!(!after_copy.iter().any(|c| c.change == SheetChange::Unknown));
+        book.paste(sheet, c1, &copied, true).unwrap();
+        let after_cut = book.changes_since(0).unwrap();
+        assert!(after_cut.iter().any(|c| c.change == SheetChange::Unknown));
     }
 
     #[test]

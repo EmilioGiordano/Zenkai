@@ -1293,6 +1293,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_formula_rewritten_by_a_cut_is_not_written_as_the_file_had_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "cut.csv", b"5,x\n=A1,y\n");
+        let csv = load.csv.take().unwrap();
+        let mut workbook = load.workbook;
+        let copied = workbook.copy(SheetId(0), Range::single(at(0, 0))).unwrap();
+        workbook.paste(SheetId(0), at(4, 2), &copied, true).unwrap();
+        let shared = RwLock::new(workbook);
+        let mut asked = request(&path, &csv, 1);
+        let found = found_by(&shared, &asked).unwrap();
+        assert!(found.moved_cells);
+        asked.binding.accepted = found;
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        let written = match outcome {
+            CsvSave::Written(..) => std::fs::read_to_string(&path).unwrap(),
+            CsvSave::WouldLose(more) => {
+                asked.binding.accepted = Losses {
+                    moved_cells: true,
+                    ..more
+                };
+                save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+                std::fs::read_to_string(&path).unwrap()
+            }
+            _ => panic!("the save should write once the losses are accepted"),
+        };
+        assert!(!written.contains("=A1"), "{written}");
+        assert_eq!(written, ",x,\n5,y,\n,,\n,,\n,,5\n");
+    }
+
+    #[test]
     fn a_reordered_sheet_keeps_its_own_edits() {
         let dir = tempfile::tempdir().unwrap();
         let (path, mut load) = opened_csv(dir.path(), "sheets.csv", b"a\n007\n008\n");
