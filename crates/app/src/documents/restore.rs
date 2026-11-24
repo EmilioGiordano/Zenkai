@@ -530,11 +530,8 @@ mod tests {
     fn a_workbook_rebuilt_from_its_csv_has_the_rows_of_the_file_again() {
         let binding = rebuilt_binding(Provenance::File);
         assert!(binding.log.is_empty());
-        assert!(!binding.introduced.moved_cells);
-        assert_eq!(
-            binding.introduced.number_formats,
-            csv_binding().introduced.number_formats
-        );
+        assert_eq!(binding.introduced, Losses::default());
+        assert_eq!(binding.accepted, csv_binding().accepted);
     }
 
     #[test]

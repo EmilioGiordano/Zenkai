@@ -207,10 +207,7 @@ fn rebuilt_csv_binding(
     match provenance {
         Provenance::File if read.is_some() => {
             rebuilt.log = EditLog::default();
-            rebuilt.introduced = Losses {
-                moved_cells: false,
-                ..rebuilt.introduced
-            };
+            rebuilt.introduced = Losses::default();
         }
         Provenance::Recovery => rebuilt.log.lose(0),
         // Work from a copy that no binding was stored for has no log to go by.
