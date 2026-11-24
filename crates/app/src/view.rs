@@ -228,6 +228,7 @@ pub struct Workspace {
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
+    root_focus: FocusHandle,
     name_box_focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     recovery_dir: Option<PathBuf>,
@@ -455,6 +456,7 @@ impl Workspace {
             generate: None,
             colors,
             focus: cx.focus_handle(),
+            root_focus: cx.focus_handle(),
             name_box_focus: cx.focus_handle().tab_stop(true),
             session_lock: None,
             recovery_dir: None,
@@ -3848,7 +3850,7 @@ impl Workspace {
                         ))
                         .build(window, cx)
                     })
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowMessages), cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_messages(window, cx)))
                     .child(Icon::new(icon).size_3().flex_none())
                     .child(div().min_w_0().truncate().child(summary)),
             );
@@ -4117,10 +4119,17 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
         self.rest_hidden_pdfs(window, cx);
+        if window.focused(cx).is_none()
+            || (self.grid.focus_handle(cx).is_focused(window)
+                && (self.documents.active().is_none() || self.chat_fills_window()))
+        {
+            window.focus(&self.root_focus, cx);
+        }
         let busy_label = self.busy_label();
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
         root.relative()
+            .track_focus(&self.root_focus)
             .map(|root| pdfs::pdf_actions(root, cx))
             .key_context({
                 let mut context = KeyContext::default();
