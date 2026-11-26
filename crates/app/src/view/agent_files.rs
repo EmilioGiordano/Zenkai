@@ -268,11 +268,12 @@ fn opened(id: WorkbookId, how: Opening, path: &InsidePath, sheets: Vec<String>) 
 mod tests {
     use std::sync::atomic::AtomicBool;
 
-    use zenkai_engine::Workbook;
+    use zenkai_engine::{Engine, Workbook, XlsxReader};
     use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
     use zenkai_types::{CellPos, CellView, Contents, SheetId, ValueKind};
 
-    use super::*;
+    // Not `super::*`: it would bring in gpui's `test` macro and `#[test]` would expand to itself.
+    use super::{apply_loaded_document, load_agent_file};
     use crate::csv_save::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
     use crate::document::ChangedFile;
     use crate::documents::Documents;
