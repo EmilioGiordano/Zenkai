@@ -1,11 +1,13 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, SystemTime};
 
 use gpui_kit::*;
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Stamp, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable};
+use zenkai_engine::{
+    EngineError, OriginalFile, Stamp, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
+};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -116,17 +118,62 @@ fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
     })
 }
 
-// A recovery copy is never the document's own file: nothing is copied from it on save,
-// and saving over the original path checks the stamp it was opened with.
-fn detach_recovery_copy(workbook: &mut Workbook, link: &Link) {
+// A recovery copy is never the document's own file: nothing is copied from it on save. The
+// original file, while it is as the session last saw it, is copied from as after opening it;
+// otherwise saving over the original path checks the stamp it was opened with.
+fn detach_recovery_copy(
+    workbook: &mut Workbook,
+    link: &Link,
+    cancel: &Arc<AtomicBool>,
+) -> Provenance {
     let Some(path) = link.path.as_deref() else {
         workbook.forget_saved_file();
-        return;
+        return Provenance::Recovery;
     };
     match link.rested.as_ref().map(|rested| rested.file) {
-        Some(file) if file.stamp.is_some() => workbook.guard_file(path, file.stamp),
-        Some(file) if file.at != SystemTime::UNIX_EPOCH => workbook.forget_saved_file(),
-        _ => workbook.guard_file(path, None),
+        Some(FileSeen {
+            stamp: Some(stamp), ..
+        }) => {
+            workbook.guard_file(path, Some(stamp));
+            adopt_original_file(workbook, path, stamp, cancel)
+        }
+        Some(file) if file.at != SystemTime::UNIX_EPOCH => {
+            workbook.forget_saved_file();
+            Provenance::Recovery
+        }
+        _ => {
+            workbook.guard_file(path, None);
+            Provenance::Recovery
+        }
+    }
+}
+
+// Leaves the workbook guarded when the file cannot be copied from. A CSV or TSV file has no
+// parts to copy.
+fn adopt_original_file(
+    workbook: &mut Workbook,
+    path: &Path,
+    stamp: Stamp,
+    cancel: &Arc<AtomicBool>,
+) -> Provenance {
+    if files::opens_as_itself(path) {
+        return Provenance::Recovery;
+    }
+    match workbook.adopt_original_file(path, stamp, cancel) {
+        Ok(OriginalFile::Adopted) => Provenance::RecoveryOverFile,
+        Ok(refused) => {
+            tracing::info!(
+                ?refused,
+                ?path,
+                "a restored workbook copies nothing from its file"
+            );
+            Provenance::Recovery
+        }
+        Err(EngineError::Cancelled) => Provenance::Recovery,
+        Err(error) => {
+            tracing::warn!(%error, ?path, "could not read the file of a restored workbook");
+            Provenance::Recovery
+        }
     }
 }
 
@@ -179,7 +226,10 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
                 if cancelled() {
                     return None;
                 }
-                detach_recovery_copy(&mut opened.workbook, link);
+                let provenance = detach_recovery_copy(&mut opened.workbook, link, cancel);
+                if cancelled() {
+                    return None;
+                }
                 return Some(LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook: opened.workbook,
@@ -190,7 +240,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
                         reader_fallback: None,
                         csv: csv_of_copy(link),
                     }),
-                    provenance: Provenance::Recovery,
+                    provenance,
                     copy: Some(copy.clone()),
                     recovery_lost: false,
                     dump_lost,
@@ -246,7 +296,9 @@ fn holds_only_saved_work(link: &Link) -> bool {
 fn hibernation_lost_text(name: &str, provenance: Provenance) -> String {
     match provenance {
         Provenance::File => t!("notice.undo_history_lost", name = name),
-        Provenance::Dump | Provenance::Recovery => t!("notice.hibernation_lost", name = name),
+        Provenance::Dump | Provenance::Recovery | Provenance::RecoveryOverFile => {
+            t!("notice.hibernation_lost", name = name)
+        }
     }
 }
 
@@ -774,7 +826,7 @@ impl Workspace {
                 if file_changed {
                     let text = match provenance {
                         Provenance::File => t!("notice.file_changed_while_unloaded", name = name),
-                        Provenance::Dump | Provenance::Recovery => {
+                        Provenance::Dump | Provenance::Recovery | Provenance::RecoveryOverFile => {
                             t!("notice.file_changed_while_hibernated", name = name)
                         }
                     };
@@ -846,7 +898,7 @@ impl Workspace {
             self.notify(Severity::Warning, text, cx);
         } else {
             match provenance {
-                Provenance::Recovery => {
+                Provenance::Recovery | Provenance::RecoveryOverFile => {
                     let text = with_time(t!("notice.recovered", name = name).to_string(), started);
                     self.notify(Severity::Warning, text, cx);
                 }
@@ -1396,12 +1448,25 @@ mod tests {
         book.save(path).unwrap();
     }
 
+    fn raw_part(path: &Path, name: &str) -> Vec<u8> {
+        use std::io::Read;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    }
+
     struct RestoredWorkbook {
         _dir: tempfile::TempDir,
         target: PathBuf,
         adopted_copy: PathBuf,
         documents: Documents,
         active: WorkbookId,
+        provenance: Provenance,
         file_changed: bool,
     }
 
@@ -1466,7 +1531,6 @@ mod tests {
         else {
             panic!("the restored link did not load");
         };
-        assert_eq!(provenance, Provenance::Recovery);
         fresh.install(Loaded {
             id: active,
             workbook: file.workbook,
@@ -1485,6 +1549,7 @@ mod tests {
             adopted_copy,
             documents: fresh,
             active,
+            provenance,
             file_changed,
         }
     }
@@ -1493,6 +1558,11 @@ mod tests {
     fn restoring_a_plain_xlsx_from_recovery_saves_in_place_without_asking() {
         for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
             let mut restored = open_edit_quit_and_restore(reader, plain_xlsx, |_| {});
+            let expected = match reader {
+                XlsxReader::Fast => Provenance::RecoveryOverFile,
+                XlsxReader::IronCalc | XlsxReader::Shadow => Provenance::Recovery,
+            };
+            assert_eq!(restored.provenance, expected, "{reader:?}");
             assert!(!restored.file_changed);
             let document = restored.documents.get(restored.active).unwrap();
             assert!(document.unsupported.is_empty());
@@ -1573,6 +1643,7 @@ mod tests {
                 .set_modified(original_time + std::time::Duration::from_secs(5))
                 .unwrap();
         });
+        assert_eq!(restored.provenance, Provenance::Recovery);
         assert!(restored.file_changed);
         let document = restored.documents.get(restored.active).unwrap();
         let shared = document.shared_workbook();
@@ -1644,10 +1715,54 @@ mod tests {
     }
 
     #[test]
-    fn restoring_a_charted_xlsx_from_recovery_asks_before_replacing_the_file() {
+    fn restoring_a_charted_xlsx_from_recovery_keeps_the_chart_and_edits_without_warning() {
+        const CHART_PART: &str = "xl/charts/chart1.xml";
         let restored = open_edit_quit_and_restore(XlsxReader::Fast, charted_xlsx, |_| {});
+        assert_eq!(restored.provenance, Provenance::RecoveryOverFile);
         assert!(!restored.file_changed);
-        let original = std::fs::read(&restored.target).unwrap();
+        let document = restored.documents.get(restored.active).unwrap();
+        assert!(!document.restored);
+        assert!(document.unsupported.contains(&Unsupported::Charts));
+        assert!(!document.may_lose_unseen_content());
+        let chart = raw_part(&restored.target, CHART_PART);
+        std::fs::write(&restored.adopted_copy, b"not a zip").unwrap();
+
+        let saved = document::save_document_file(
+            &document.shared_workbook(),
+            &restored.target,
+            &[],
+            ChangedFile::Ask,
+            document.file_guard(),
+            zenkai_engine::save_xlsx,
+        );
+        let Ok(DocumentSave::Written { kept }) = saved else {
+            panic!("saving over an adopted charted file did not write: {saved:?}");
+        };
+        assert!(kept.contains(&Unsupported::Charts));
+
+        let reopened = zenkai_engine::open_xlsx(&restored.target).unwrap();
+        assert!(reopened.unsupported.contains(&Unsupported::Charts));
+        assert_eq!(raw_part(&restored.target, CHART_PART), chart);
+        assert_eq!(text(&reopened.workbook), "50");
+        let a3 = CellPos::parse_a1("A3").unwrap();
+        assert_eq!(reopened.workbook.cell(SheetId(0), a3).text, "70");
+    }
+
+    #[test]
+    fn a_charted_xlsx_whose_adoption_is_refused_still_asks_before_replacing_the_file() {
+        let restored = open_edit_quit_and_restore(XlsxReader::Fast, charted_xlsx, |target| {
+            let original_time = std::fs::metadata(target).unwrap().modified().unwrap();
+            write_file(target, "theirs");
+            std::fs::File::options()
+                .write(true)
+                .open(target)
+                .unwrap()
+                .set_modified(original_time + std::time::Duration::from_secs(5))
+                .unwrap();
+        });
+        assert_eq!(restored.provenance, Provenance::Recovery);
+        assert!(restored.file_changed);
+        let on_disk = std::fs::read(&restored.target).unwrap();
         let document = restored.documents.get(restored.active).unwrap();
         assert!(document.restored);
         assert!(document.unsupported.contains(&Unsupported::Charts));
@@ -1655,7 +1770,7 @@ mod tests {
 
         let shared = document.shared_workbook();
         let guard = document.file_guard();
-        let refused = document::save_document_file(
+        let changed = document::save_document_file(
             &shared,
             &restored.target,
             &[],
@@ -1663,17 +1778,28 @@ mod tests {
             guard,
             zenkai_engine::save_xlsx,
         );
+        assert_eq!(changed.unwrap(), DocumentSave::BaseChanged);
+        assert_eq!(std::fs::read(&restored.target).unwrap(), on_disk);
+
+        let refused = document::save_document_file(
+            &shared,
+            &restored.target,
+            &[],
+            ChangedFile::Replace,
+            guard,
+            zenkai_engine::save_xlsx,
+        );
         let Ok(DocumentSave::Refused { dropped }) = refused else {
             panic!("saving over a charted file did not stop: {refused:?}");
         };
         assert!(dropped.contains(&Unsupported::Charts));
-        assert_eq!(std::fs::read(&restored.target).unwrap(), original);
+        assert_eq!(std::fs::read(&restored.target).unwrap(), on_disk);
 
         let saved = document::save_document_file(
             &shared,
             &restored.target,
             &dropped,
-            ChangedFile::Ask,
+            ChangedFile::Replace,
             guard,
             zenkai_engine::save_xlsx,
         );
@@ -1684,9 +1810,30 @@ mod tests {
         assert_eq!(reopened.cell(SheetId(0), a3).text, "70");
 
         let ironcalc = open_edit_quit_and_restore(XlsxReader::IronCalc, charted_xlsx, |_| {});
+        assert_eq!(ironcalc.provenance, Provenance::Recovery);
+        assert!(!ironcalc.file_changed);
         let document = ironcalc.documents.get(ironcalc.active).unwrap();
         assert!(document.restored);
         assert!(document.unsupported.contains(&Unsupported::Charts));
         assert!(document.may_lose_unseen_content());
+    }
+
+    #[test]
+    fn a_csv_recovery_copy_is_never_adopted() {
+        let mut setup = hibernated();
+        let file = setup._dir.path().join("prices.csv");
+        std::fs::write(&file, b"1,2\r\n").unwrap();
+        let stamp = Stamp::of(&file).unwrap();
+        setup.link.path = Some(file);
+        setup.link.rested = Some(Box::new(Rested {
+            file: FileSeen {
+                stamp: Some(stamp),
+                at: SystemTime::now(),
+            },
+            hibernation: None,
+        }));
+        let (loaded_file, provenance, _) = loaded(read(&setup.link));
+        assert_eq!(provenance, Provenance::Recovery);
+        assert!(loaded_file.csv.is_some());
     }
 }
