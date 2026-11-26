@@ -909,7 +909,7 @@ mod tests {
     use std::time::SystemTime;
 
     use zenkai_agent::protected_view::FileOrigin;
-    use zenkai_engine::{Engine, SaveTarget, Stamp, Workbook, XlsxReader};
+    use zenkai_engine::{Engine, SaveTarget, Stamp, Unsupported, Workbook, XlsxReader};
     use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
     use zenkai_grid::ViewState;
     use zenkai_types::{CellPos, SheetId, WorkbookId};
@@ -1382,6 +1382,20 @@ mod tests {
         book.save(path).unwrap();
     }
 
+    fn charted_xlsx(path: &Path) {
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let sheet = book.add_worksheet();
+        sheet.write_number(0, 0, 10.0).unwrap();
+        sheet.write_number(1, 0, 20.0).unwrap();
+        sheet
+            .write_formula(2, 0, rust_xlsxwriter::Formula::new("=SUM(A1:A2)"))
+            .unwrap();
+        let mut chart = rust_xlsxwriter::Chart::new(rust_xlsxwriter::ChartType::Column);
+        chart.add_series().set_values("Sheet1!$A$1:$A$3");
+        sheet.insert_chart(0, 2, &chart).unwrap();
+        book.save(path).unwrap();
+    }
+
     struct RestoredWorkbook {
         _dir: tempfile::TempDir,
         target: PathBuf,
@@ -1393,16 +1407,16 @@ mod tests {
 
     fn open_edit_quit_and_restore(
         reader: XlsxReader,
+        write_source: impl FnOnce(&Path),
         mutate_before_restore: impl FnOnce(&Path),
     ) -> RestoredWorkbook {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("plain.xlsx");
+        let target = dir.path().join("book.xlsx");
         let session_dir = dir.path().join("session");
         let recovery_dir = session_dir.join("recovery");
-        plain_xlsx(&target);
+        write_source(&target);
 
         let opened = zenkai_engine::open_xlsx_with(&target, reader).unwrap();
-        assert!(opened.unsupported.is_empty());
         let mut documents = Documents::new(Workbook::new_empty().unwrap());
         let id = documents.open(opened.workbook, Some(target.clone()), opened.unsupported);
         {
@@ -1478,9 +1492,10 @@ mod tests {
     #[test]
     fn restoring_a_plain_xlsx_from_recovery_saves_in_place_without_asking() {
         for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
-            let mut restored = open_edit_quit_and_restore(reader, |_| {});
+            let mut restored = open_edit_quit_and_restore(reader, plain_xlsx, |_| {});
             assert!(!restored.file_changed);
             let document = restored.documents.get(restored.active).unwrap();
+            assert!(document.unsupported.is_empty());
             assert!(!document.may_lose_unseen_content());
             assert!(!document.read_only);
             assert_eq!(document.path.as_deref(), Some(restored.target.as_path()));
@@ -1548,7 +1563,7 @@ mod tests {
 
     #[test]
     fn a_restored_workbook_whose_file_was_changed_by_another_program_still_asks() {
-        let restored = open_edit_quit_and_restore(XlsxReader::Fast, |target| {
+        let restored = open_edit_quit_and_restore(XlsxReader::Fast, plain_xlsx, |target| {
             let original_time = std::fs::metadata(target).unwrap().modified().unwrap();
             write_file(target, "theirs");
             std::fs::File::options()
@@ -1626,5 +1641,52 @@ mod tests {
         assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
         let on_disk = zenkai_engine::open_xlsx(&target).unwrap().workbook;
         assert_eq!(text(&on_disk), "10");
+    }
+
+    #[test]
+    fn restoring_a_charted_xlsx_from_recovery_asks_before_replacing_the_file() {
+        let restored = open_edit_quit_and_restore(XlsxReader::Fast, charted_xlsx, |_| {});
+        assert!(!restored.file_changed);
+        let original = std::fs::read(&restored.target).unwrap();
+        let document = restored.documents.get(restored.active).unwrap();
+        assert!(document.restored);
+        assert!(document.unsupported.contains(&Unsupported::Charts));
+        assert!(document.may_lose_unseen_content());
+
+        let shared = document.shared_workbook();
+        let guard = document.file_guard();
+        let refused = document::save_document_file(
+            &shared,
+            &restored.target,
+            &[],
+            ChangedFile::Ask,
+            guard,
+            zenkai_engine::save_xlsx,
+        );
+        let Ok(DocumentSave::Refused { dropped }) = refused else {
+            panic!("saving over a charted file did not stop: {refused:?}");
+        };
+        assert!(dropped.contains(&Unsupported::Charts));
+        assert_eq!(std::fs::read(&restored.target).unwrap(), original);
+
+        let saved = document::save_document_file(
+            &shared,
+            &restored.target,
+            &dropped,
+            ChangedFile::Ask,
+            guard,
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
+        let reopened = zenkai_engine::open_xlsx(&restored.target).unwrap().workbook;
+        assert_eq!(text(&reopened), "50");
+        let a3 = CellPos::parse_a1("A3").unwrap();
+        assert_eq!(reopened.cell(SheetId(0), a3).text, "70");
+
+        let ironcalc = open_edit_quit_and_restore(XlsxReader::IronCalc, charted_xlsx, |_| {});
+        let document = ironcalc.documents.get(ironcalc.active).unwrap();
+        assert!(document.restored);
+        assert!(document.unsupported.contains(&Unsupported::Charts));
+        assert!(document.may_lose_unseen_content());
     }
 }
