@@ -373,7 +373,12 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let opened = cx
                 .background_executor()
-                .spawn(async move { open_xlsx(&path).map(|opened| (opened, path)) })
+                .spawn(async move {
+                    open_xlsx(&path).map(|mut opened| {
+                        opened.workbook.forget_saved_file();
+                        (opened, path)
+                    })
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| match opened {
                 Ok((opened, path)) => {
@@ -929,6 +934,7 @@ mod tests {
             csv: None,
             base: None,
             file_modified: None,
+            file_len: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: Vec::new(),

@@ -8,7 +8,7 @@ use zenkai_types::{SheetId, WorkbookId};
 use crate::csv_options::{CsvBinding, Losses};
 use crate::document::{self, Document, FileJob, SharedWorkbook};
 use crate::edit_log::EditLog;
-use crate::entry::{CsvLoad, Entry, Link, LinkStatus, Slot};
+use crate::entry::{CsvLoad, Entry, FileSeen, Link, LinkStatus, Slot};
 use crate::files;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::{SpaceId, Spaces};
@@ -168,6 +168,8 @@ impl Loaded {
             document.baseline_csv();
             if let Some(csv) = &self.csv {
                 document.guard_file(csv.seen);
+            } else if from_copy && link.rested.is_none() {
+                document.guard_file(FileSeen::unknown());
             }
         }
         document.origin = link.origin.unwrap_or(self.origin);
@@ -909,6 +911,7 @@ mod tests {
             csv: None,
             base: None,
             file_modified: None,
+            file_len: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: Vec::new(),

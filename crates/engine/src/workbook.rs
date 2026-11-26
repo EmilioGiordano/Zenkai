@@ -845,9 +845,32 @@ impl Workbook {
     }
 
     // When the file the workbook came from was last read or written by it; `None` if it
-    // did not come from a file it can copy from.
+    // never came from a file or its stamp could not be read.
     pub fn file_stamp(&self) -> Option<crate::saved::Stamp> {
-        self.saved.current().map(|file| file.stamp)
+        self.saved.current().map(|file| file.stamp).or_else(|| {
+            self.saved
+                .known()
+                .map(|file| file.stamp)
+                .filter(|stamp| !stamp.is_never_matching())
+        })
+    }
+
+    // Drops any link to the file the workbook was read from, so a recovery copy is never
+    // treated as the document's own file or copied from on save.
+    pub fn forget_saved_file(&mut self) {
+        self.saved.set(None);
+        self.saved.set_known(None);
+    }
+
+    // Replaces the opened file with a guard on `path`: nothing is copied from the file the
+    // workbook was read from, and saving over `path` checks `stamp` (or asks when `None`).
+    pub fn guard_file(&mut self, path: &std::path::Path, stamp: Option<crate::saved::Stamp>) {
+        self.saved.set(None);
+        let stamp = stamp.unwrap_or_else(crate::saved::Stamp::never_matching);
+        self.saved.set_known(Some(KnownFile {
+            path: path.to_path_buf(),
+            stamp,
+        }));
     }
 
     pub fn format_edits(&self) -> crate::model::FormatEdits {

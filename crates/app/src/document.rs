@@ -89,6 +89,8 @@ pub struct Document {
     // The file as the workbook last had it, kept while the workbook stands on a copy of its
     // work (a dump or a recovery copy) so a Save asks before replacing a file that changed.
     file_guard: Option<FileSeen>,
+    // Kept outside the workbook lock so a session snapshot during recalculation does not drop it.
+    file_stamp: Option<Stamp>,
 }
 
 pub fn labels(kinds: &[Unsupported]) -> String {
@@ -151,6 +153,7 @@ impl Document {
         unsupported: Vec<Unsupported>,
     ) -> Document {
         let sheets = workbook.sheets();
+        let file_stamp = workbook.file_stamp();
         let csv = path
             .as_deref()
             .filter(|path| files::opens_as_itself(path))
@@ -190,6 +193,7 @@ impl Document {
             autosave_cancel: Arc::new(AtomicBool::new(false)),
             hibernation_failed_at: None,
             file_guard: None,
+            file_stamp,
         }
     }
 
@@ -437,6 +441,14 @@ impl Document {
         self.unsupported = kept;
         self.restored = false;
         self.file_guard = None;
+        self.file_stamp = self.workbook().and_then(|workbook| workbook.file_stamp());
+    }
+
+    pub fn file_stamp(&self) -> Option<Stamp> {
+        match self.workbook() {
+            Some(workbook) => workbook.file_stamp(),
+            None => self.file_stamp,
+        }
     }
 
     pub fn file_guard(&self) -> Option<FileSeen> {
@@ -537,12 +549,16 @@ impl Document {
 
     // A busy workbook leaves the sheet list as it was and marks it stale for a retry.
     pub fn sync_sheets(&mut self) {
-        let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) else {
+        let Some(workbook) = self.workbook() else {
             self.sheets_stale = true;
             return;
         };
+        let sheets = workbook.sheets();
+        let file_stamp = workbook.file_stamp();
+        drop(workbook);
         self.sheets_stale = false;
         self.sheets = sheets;
+        self.file_stamp = file_stamp;
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {
             self.sheet = SheetId(last);
@@ -1913,5 +1929,43 @@ mod tests {
         assert!(written.is_ok(), "{written:?}");
         assert_eq!(saved_text(&recovery), "mine");
         assert_eq!(std::fs::read(&target).unwrap(), before);
+    }
+
+    #[test]
+    fn a_saved_stamp_missed_during_a_recalculation_recovers_when_the_batch_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let mut document = Document::new(
+            WorkbookId(0),
+            SpaceId(0),
+            0,
+            Workbook::new_empty().unwrap(),
+            Some(target.clone()),
+            Vec::new(),
+        );
+        let shared = document.shared_workbook();
+        save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            None,
+            zenkai_engine::save_xlsx,
+        )
+        .unwrap();
+        let expected = Stamp::of(&target).unwrap();
+
+        document.queue(noop());
+        let generation = document.generation();
+        let (batch_shared, _) = document.take_batch().unwrap();
+        let guard = batch_shared.write().unwrap();
+        document.saved_over_file(Vec::new());
+        assert_eq!(document.file_stamp(), None);
+        drop(guard);
+
+        assert!(document.finish_batch(generation));
+        let guard = batch_shared.write().unwrap();
+        assert_eq!(document.file_stamp(), Some(expected));
+        drop(guard);
     }
 }

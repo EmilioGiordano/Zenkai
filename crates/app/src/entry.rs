@@ -343,9 +343,8 @@ impl Document {
     // A restored workbook stands on a recovery copy, whose own stamp says nothing about the
     // file, so the guard it was restored with is what carries on.
     fn file_seen(&self) -> FileSeen {
-        self.file_guard().unwrap_or_else(|| {
-            FileSeen::from_stamp(self.workbook().and_then(|workbook| workbook.file_stamp()))
-        })
+        self.file_guard()
+            .unwrap_or_else(|| FileSeen::from_stamp(self.file_stamp()))
     }
 
     // The link a workbook becomes when it goes to disk with its undo history. With unsaved work

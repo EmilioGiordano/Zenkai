@@ -24,6 +24,7 @@ fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord 
         csv: None,
         base: None,
         file_modified: None,
+        file_len: None,
         pdf: Default::default(),
         text_zoom: Default::default(),
         unsupported: vec!["charts".to_string(), "macros".to_string()],

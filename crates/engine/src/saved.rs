@@ -30,6 +30,21 @@ impl Stamp {
         }
     }
 
+    pub(crate) fn is_never_matching(&self) -> bool {
+        *self == Stamp::never_matching()
+    }
+
+    pub fn from_parts(size: u64, modified: SystemTime) -> Stamp {
+        Stamp {
+            len: size,
+            modified,
+        }
+    }
+
+    pub fn size(&self) -> u64 {
+        self.len
+    }
+
     pub fn modified(&self) -> SystemTime {
         self.modified
     }

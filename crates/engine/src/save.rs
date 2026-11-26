@@ -819,4 +819,92 @@ mod tests {
         super::save_xlsx(snapshot).unwrap();
         assert!(crate::file::open_xlsx(&path).is_ok());
     }
+
+    #[test]
+    fn file_stamp_stays_available_when_nothing_can_be_copied_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.xlsx");
+        let mut source = rust_xlsxwriter::Workbook::new();
+        let sheet = source.add_worksheet();
+        sheet.write_number(0, 0, 10.0).unwrap();
+        sheet.write_number(1, 0, 20.0).unwrap();
+        sheet
+            .write_formula(2, 0, rust_xlsxwriter::Formula::new("=SUM(A1:A2)"))
+            .unwrap();
+        sheet.set_column_width(0, 18.0).unwrap();
+        source.save(&path).unwrap();
+        let expected = crate::saved::Stamp::of(&path).unwrap();
+
+        let ironcalc = crate::file::open_xlsx_with(&path, crate::xlsx_read::XlsxReader::IronCalc)
+            .unwrap()
+            .workbook;
+        assert_eq!(ironcalc.file_stamp(), Some(expected));
+
+        let fast = crate::file::open_xlsx(&path).unwrap().workbook;
+        let elsewhere = dir.path().join("elsewhere.xlsx");
+        let probe = fast
+            .save_snapshot(&elsewhere, super::SaveTarget::Copy)
+            .unwrap();
+        probe.slot.set(None);
+        assert_eq!(fast.file_stamp(), Some(expected));
+    }
+
+    #[test]
+    fn a_guarded_recovery_copy_never_copies_from_the_recovery_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (original, mut book) = saved_and_reopened(dir.path());
+        let original_stamp = crate::saved::Stamp::of(&original).unwrap();
+        let recovery = dir.path().join("autosave-1-2-0.xlsx");
+        book.set_input(SheetId(0), CellPos::default(), "9").unwrap();
+        super::save_xlsx(
+            book.save_snapshot(&recovery, super::SaveTarget::Copy)
+                .unwrap(),
+        )
+        .unwrap();
+
+        let mut recovered = crate::file::open_xlsx(&recovery).unwrap().workbook;
+        recovered.guard_file(&original, Some(original_stamp));
+        assert_eq!(recovered.file_stamp(), Some(original_stamp));
+
+        std::fs::write(&recovery, b"corrupted recovery").unwrap();
+        let snapshot = recovered
+            .save_snapshot(&original, super::SaveTarget::Document)
+            .unwrap();
+        assert!(matches!(snapshot.plan, super::Plan::Full(_)));
+        super::save_xlsx(snapshot).unwrap();
+        let reopened = crate::file::open_xlsx(&original).unwrap().workbook;
+        assert_eq!(reopened.cell(SheetId(0), CellPos::default()).text, "9");
+
+        recovered
+            .set_input(SheetId(0), CellPos::default(), "12")
+            .unwrap();
+        let next = recovered
+            .save_snapshot(&original, super::SaveTarget::Document)
+            .unwrap();
+        assert!(matches!(&next.plan, super::Plan::Patch(patch) if patch.base.path == original));
+        super::save_xlsx(next).unwrap();
+        let reopened = crate::file::open_xlsx(&original).unwrap().workbook;
+        assert_eq!(reopened.cell(SheetId(0), CellPos::default()).text, "12");
+    }
+
+    #[test]
+    fn guarding_a_file_without_a_stamp_refuses_until_replace_is_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (original, mut book) = saved_and_reopened(dir.path());
+        book.guard_file(&original, None);
+        assert_eq!(book.file_stamp(), None);
+
+        let snapshot = book
+            .save_snapshot(&original, super::SaveTarget::Document)
+            .unwrap();
+        assert!(matches!(snapshot.plan, super::Plan::Full(_)));
+        assert!(is_changed_on_disk(super::save_xlsx(snapshot)));
+
+        let replacing = book
+            .save_snapshot(&original, super::SaveTarget::Document)
+            .unwrap()
+            .replacing_changed_file();
+        super::save_xlsx(replacing).unwrap();
+        assert!(book.file_stamp().is_some());
+    }
 }
