@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ironcalc::base::types::Workbook;
-use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings};
+use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings, SheetLinks};
 
 use crate::error::EngineError;
 use crate::fingerprint::{ROW_PRINT_BUDGET_BYTES, SheetPrint, book_print, sheet_print};
@@ -239,6 +239,14 @@ pub(crate) fn selected_sheet(book: &Workbook) -> usize {
 pub(crate) struct OpenedParts {
     pub(crate) layout: PackageLayout,
     pub(crate) held: Held,
+}
+
+// What the file a workbook was opened from held per sheet, kept past `guard_file` so
+// adopting an original file can verify the recovery copy dropped no links or uncarried parts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceParts {
+    pub(crate) held: Held,
+    pub(crate) sheet_links: Vec<SheetLinks>,
 }
 
 // A file just read by the streaming reader, unchanged on disk while it was read.

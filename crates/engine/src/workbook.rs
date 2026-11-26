@@ -15,7 +15,7 @@ use crate::inputs_plan::plan_inputs;
 use crate::model::{CachedModel, HistoryStep, content_cells_within, for_each_within};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
-use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
+use crate::saved::{FileOnDisk, KnownFile, SavedSlot, SourceParts};
 use crate::sheet_settings::{Carried, SheetSettings};
 use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
@@ -180,6 +180,7 @@ pub struct Workbook {
     pub(crate) saved: SavedSlot,
     // What the file held when it was opened, for a save that knows nothing newer.
     pub(crate) opened: Vec<Unsupported>,
+    pub(crate) source_parts: Option<SourceParts>,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -653,6 +654,7 @@ impl Workbook {
             carried: Carried::default(),
             saved: SavedSlot::default(),
             opened: Vec::new(),
+            source_parts: None,
         })
     }
 
@@ -664,7 +666,13 @@ impl Workbook {
         book: ironcalc::base::types::Workbook,
     ) -> Result<Workbook, EngineError> {
         let model = engine_model(book)?;
-        evaluated(model, Carried::default(), SavedSlot::default(), Vec::new())
+        evaluated(
+            model,
+            Carried::default(),
+            SavedSlot::default(),
+            Vec::new(),
+            None,
+        )
     }
 
     // `settings` are by position among the file's worksheets, the order IronCalc loads them
@@ -681,13 +689,17 @@ impl Workbook {
         let carried = carried_by_position(&model, settings);
         let saved = SavedSlot::default();
         saved.set_known(known);
+        let source_parts = file.as_ref().map(|file| SourceParts {
+            held: file.parts.held.clone(),
+            sheet_links: file.parts.layout.sheet_links.clone(),
+        });
         if let Some(file) = file {
             saved.set(
                 tracing::info_span!("open_saved_parts")
                     .in_scope(|| crate::saved::opened(file, ModelData::of(&model), &carried)),
             );
         }
-        evaluated(model, carried, saved, opened.to_vec())
+        evaluated(model, carried, saved, opened.to_vec(), source_parts)
     }
 
     // The identity of a sheet that its place in the workbook does not change.
@@ -2306,12 +2318,13 @@ fn evaluated(
     carried: Carried,
     saved: SavedSlot,
     opened: Vec<Unsupported>,
+    source_parts: Option<SourceParts>,
 ) -> Result<Workbook, EngineError> {
     let mut model = UserModel::from_model(model);
     tracing::info_span!("open_evaluate")
         .in_scope(|| model.evaluate_opened())
         .map_err(model_error)?;
-    Ok(warmed(model, carried, saved, opened))
+    Ok(warmed(model, carried, saved, opened, source_parts))
 }
 
 // A woken workbook held these results in memory when it was hibernated, so evaluating
@@ -2323,7 +2336,7 @@ pub(crate) fn evaluated_user_model(
     opened: Vec<Unsupported>,
 ) -> Workbook {
     tracing::info_span!("open_evaluate").in_scope(|| model.evaluate());
-    warmed(model, carried, saved, opened)
+    warmed(model, carried, saved, opened, None)
 }
 
 fn warmed(
@@ -2331,12 +2344,14 @@ fn warmed(
     carried: Carried,
     saved: SavedSlot,
     opened: Vec<Unsupported>,
+    source_parts: Option<SourceParts>,
 ) -> Workbook {
     let workbook = Workbook {
         model: CachedModel::new(model),
         carried,
         saved,
         opened,
+        source_parts,
     };
     tracing::info_span!("open_warm_used_areas").in_scope(|| workbook.warm_used_areas());
     workbook
@@ -2697,7 +2712,13 @@ mod tests {
     fn opened_within(budget: u64) -> Result<Workbook, EngineError> {
         let book = long_text_book();
         let model = Model::from_workbook_within(book, LANGUAGE, budget).map_err(model_error)?;
-        evaluated(model, Carried::default(), SavedSlot::default(), Vec::new())
+        evaluated(
+            model,
+            Carried::default(),
+            SavedSlot::default(),
+            Vec::new(),
+            None,
+        )
     }
 
     #[test]
