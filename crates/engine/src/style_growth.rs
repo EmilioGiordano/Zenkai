@@ -117,6 +117,34 @@ impl StylesBase {
         Ok(print(styles, self.growth, &self.counts)? == self.print)
     }
 
+    // Exact check against the original file's styles before adopting it for another workbook.
+    pub(crate) fn lines_up(&self, read: &Styles, workbook: &Styles) -> Result<bool, EngineError> {
+        let aligned = match self.growth {
+            StyleGrowth::Never => workbook == read,
+            StyleGrowth::Appends => {
+                let added = workbook.num_fmts.get(read.num_fmts.len()..);
+                let distinct_num_fmts = added.is_some_and(|added| {
+                    added.iter().all(|item| {
+                        !read
+                            .num_fmts
+                            .iter()
+                            .any(|e| e.num_fmt_id == item.num_fmt_id)
+                    })
+                });
+                workbook.num_fmts.starts_with(&read.num_fmts)
+                    && distinct_num_fmts
+                    && workbook.fonts.starts_with(&read.fonts)
+                    && workbook.fills.starts_with(&read.fills)
+                    && workbook.borders.starts_with(&read.borders)
+                    && workbook.cell_xfs.starts_with(&read.cell_xfs)
+                    && workbook.cell_style_xfs == read.cell_style_xfs
+                    && workbook.cell_styles == read.cell_styles
+                    && workbook.dxfs == read.dxfs
+            }
+        };
+        Ok(aligned && self.unchanged(workbook)?)
+    }
+
     // What the file holds once the styles added since are in it, and those styles.
     pub(crate) fn grown(
         &self,

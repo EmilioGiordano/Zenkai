@@ -95,18 +95,7 @@ pub fn open_xlsx_cancellable(
     reader: XlsxReader,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Opened, EngineError> {
-    let read_error = |source| EngineError::Read {
-        path: path.to_path_buf(),
-        source,
-    };
-    let size = fs::metadata(path).map_err(read_error)?.len();
-    if size > preflight::MAX_FILE_BYTES {
-        return Err(EngineError::Unsafe(format!(
-            "the file is {} MB, larger than the {} MB supported",
-            size / 1024 / 1024,
-            preflight::MAX_FILE_BYTES / 1024 / 1024
-        )));
-    }
+    refuse_oversized(path)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -144,6 +133,23 @@ pub fn open_xlsx_cancellable(
         unsupported: read.unsupported,
         fallback: read.fallback,
     })
+}
+
+pub(crate) fn refuse_oversized(path: &Path) -> Result<(), EngineError> {
+    let size = fs::metadata(path)
+        .map_err(|source| EngineError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    if size > preflight::MAX_FILE_BYTES {
+        return Err(EngineError::Unsafe(format!(
+            "the file is {} MB, larger than the {} MB supported",
+            size / 1024 / 1024,
+            preflight::MAX_FILE_BYTES / 1024 / 1024
+        )));
+    }
+    Ok(())
 }
 
 pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {

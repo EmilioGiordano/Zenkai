@@ -113,6 +113,9 @@ pub enum Provenance {
     File,
     // The autosaved copy of unsaved work, which can lack what the file holds.
     Recovery,
+    // The autosaved copy of unsaved work over a file still as the session last saw it: a save
+    // copies what the work did not change from that file, as after opening it.
+    RecoveryOverFile,
     // The memory dump of a hibernated workbook: the same workbook, with its undo history.
     Dump,
 }
@@ -145,7 +148,7 @@ impl Loaded {
             unsupported,
         );
         document.restored = match self.provenance {
-            Provenance::File => false,
+            Provenance::File | Provenance::RecoveryOverFile => false,
             Provenance::Recovery => true,
             Provenance::Dump => link
                 .rested
@@ -211,7 +214,7 @@ fn rebuilt_csv_binding(
             rebuilt.log = EditLog::default();
             rebuilt.introduced = Losses::default();
         }
-        Provenance::Recovery => rebuilt.log.lose(0),
+        Provenance::Recovery | Provenance::RecoveryOverFile => rebuilt.log.lose(0),
         // Work from a copy that no binding was stored for has no log to go by.
         Provenance::Dump if unrecorded => rebuilt.log.lose(0),
         _ => {}
