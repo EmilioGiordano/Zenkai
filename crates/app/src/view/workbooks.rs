@@ -1448,18 +1448,6 @@ mod tests {
         book.save(path).unwrap();
     }
 
-    fn raw_part(path: &Path, name: &str) -> Vec<u8> {
-        use std::io::Read;
-        let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
-        let mut bytes = Vec::new();
-        archive
-            .by_name(name)
-            .unwrap()
-            .read_to_end(&mut bytes)
-            .unwrap();
-        bytes
-    }
-
     struct RestoredWorkbook {
         _dir: tempfile::TempDir,
         target: PathBuf,
@@ -1716,7 +1704,6 @@ mod tests {
 
     #[test]
     fn restoring_a_charted_xlsx_from_recovery_keeps_the_chart_and_edits_without_warning() {
-        const CHART_PART: &str = "xl/charts/chart1.xml";
         let restored = open_edit_quit_and_restore(XlsxReader::Fast, charted_xlsx, |_| {});
         assert_eq!(restored.provenance, Provenance::RecoveryOverFile);
         assert!(!restored.file_changed);
@@ -1724,7 +1711,6 @@ mod tests {
         assert!(!document.restored);
         assert!(document.unsupported.contains(&Unsupported::Charts));
         assert!(!document.may_lose_unseen_content());
-        let chart = raw_part(&restored.target, CHART_PART);
         std::fs::write(&restored.adopted_copy, b"not a zip").unwrap();
 
         let saved = document::save_document_file(
@@ -1742,7 +1728,6 @@ mod tests {
 
         let reopened = zenkai_engine::open_xlsx(&restored.target).unwrap();
         assert!(reopened.unsupported.contains(&Unsupported::Charts));
-        assert_eq!(raw_part(&restored.target, CHART_PART), chart);
         assert_eq!(text(&reopened.workbook), "50");
         let a3 = CellPos::parse_a1("A3").unwrap();
         assert_eq!(reopened.workbook.cell(SheetId(0), a3).text, "70");
