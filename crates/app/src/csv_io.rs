@@ -1,16 +1,16 @@
-use std::borrow::Cow;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use zenkai_agent::protected_view::file_origin;
 use zenkai_engine::{
-    Engine, EngineError, ShownCells, Workbook, run_with_engine_stack, write_atomic_streaming,
+    EngineError, ShownCells, Workbook, workbook_from_rows as engine_workbook_from_rows,
+    write_atomic_streaming,
 };
 use zenkai_formats::{
-    CsvError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv, apply, guess,
-    import_input, parse_csv,
+    CsvError, CsvReadError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv,
+    apply, guess, parse_csv, prepare_import_inputs, read_csv_bytes, tsv_delimiter,
 };
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, MAX_ROWS, RowIdx, SheetId};
@@ -18,7 +18,7 @@ use zenkai_types::{CellPos, MAX_ROWS, RowIdx, SheetId};
 use crate::csv_options::CsvOptions;
 use crate::document::read_shared;
 use crate::entry::{CsvLoad, FileSeen};
-use crate::files::{FileLoad, LoadFailure, export_delimiter, tsv_delimiter};
+use crate::files::{FileLoad, LoadFailure, export_delimiter};
 
 pub struct CsvRead {
     pub bytes: Vec<u8>,
@@ -26,56 +26,35 @@ pub struct CsvRead {
     pub seen: FileSeen,
 }
 
-enum ReadStop {
-    Io(std::io::Error),
-    TooLarge(usize),
-}
-
-impl ReadStop {
-    fn into_engine_error(self, path: &Path) -> EngineError {
-        match self {
-            ReadStop::Io(source) => EngineError::Read {
-                path: path.to_path_buf(),
-                source,
-            },
-            ReadStop::TooLarge(megabytes) => {
-                EngineError::Rejected(CsvError::TooLarge(megabytes).to_string())
-            }
-        }
-    }
-
-    fn message(self, path: &Path) -> String {
-        match self.into_engine_error(path) {
-            EngineError::Read { path, source } => {
-                t!("file.read_failed", path = path.display(), error = source)
-            }
-            other => other.to_string(),
-        }
+fn into_engine_error(error: CsvReadError, path: &Path) -> EngineError {
+    match error {
+        CsvReadError::Io(source) => EngineError::Read {
+            path: path.to_path_buf(),
+            source,
+        },
+        too_large @ CsvReadError::TooLarge(_) => EngineError::Rejected(too_large.to_string()),
     }
 }
 
-// The size is checked on the open file and the read is capped too, so a file that grows
-// meanwhile cannot fill memory. The stamp is taken before the read, so a change in between counts.
-fn read_with_stamp(path: &Path, limit: usize) -> Result<(Vec<u8>, FileSeen), ReadStop> {
+fn read_error_message(error: CsvReadError, path: &Path) -> String {
+    match into_engine_error(error, path) {
+        EngineError::Read { path, source } => {
+            t!("file.read_failed", path = path.display(), error = source)
+        }
+        other => other.to_string(),
+    }
+}
+
+// The stamp is taken before the read, so a change in between counts.
+fn read_with_stamp(path: &Path, limit: usize) -> Result<(Vec<u8>, FileSeen), CsvReadError> {
     let seen = FileSeen::of(path);
-    let file = std::fs::File::open(path).map_err(ReadStop::Io)?;
-    let length = file.metadata().map_err(ReadStop::Io)?.len();
-    let megabytes = |bytes: u64| usize::try_from(bytes / 1024 / 1024).unwrap_or(usize::MAX);
-    if length > limit as u64 {
-        return Err(ReadStop::TooLarge(megabytes(length)));
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or_default());
-    file.take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(ReadStop::Io)?;
-    if bytes.len() > limit {
-        return Err(ReadStop::TooLarge(megabytes(bytes.len() as u64)));
-    }
+    let bytes = read_csv_bytes(path, limit)?;
     Ok((bytes, seen))
 }
 
 pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
-    let (bytes, seen) = read_with_stamp(path, MAX_CSV_BYTES).map_err(|stop| stop.message(path))?;
+    let (bytes, seen) =
+        read_with_stamp(path, MAX_CSV_BYTES).map_err(|error| read_error_message(error, path))?;
     let parsed = parse_csv(&bytes, tsv_delimiter(path)).map_err(|e| e.to_string())?;
     Ok(CsvRead {
         bytes,
@@ -106,10 +85,10 @@ pub enum BaselineRead {
 pub fn read_baseline(path: &Path, delimiter: Delimiter) -> Result<BaselineRead, EngineError> {
     let (bytes, _) = match read_with_stamp(path, MAX_CSV_BYTES) {
         Ok(read) => read,
-        Err(ReadStop::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(CsvReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(BaselineRead::Absent);
         }
-        Err(stop) => return Err(stop.into_engine_error(path)),
+        Err(error) => return Err(into_engine_error(error, path)),
     };
     let parsed = parse_csv(&bytes, Some(delimiter))
         .map_err(|error| EngineError::Rejected(error.to_string()))?;
@@ -126,15 +105,18 @@ pub fn read_baseline(path: &Path, delimiter: Delimiter) -> Result<BaselineRead, 
 // Opens a CSV as the document it is, without a preview: with the stored choices, or those read
 // from the file. Encoding and line ending are always the file's own as it is now.
 pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, LoadFailure> {
-    let (bytes, seen) = read_with_stamp(path, MAX_CSV_BYTES).map_err(|stop| match stop {
-        ReadStop::Io(error) if error.kind() == std::io::ErrorKind::NotFound => LoadFailure::Missing,
-        other => LoadFailure::Engine(other.into_engine_error(path)),
+    let (bytes, seen) = read_with_stamp(path, MAX_CSV_BYTES).map_err(|error| match error {
+        CsvReadError::Io(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            LoadFailure::Missing
+        }
+        other => LoadFailure::Engine(into_engine_error(other, path)),
     })?;
     let hint = stored
         .map(|options| options.delimiter)
         .or_else(|| tsv_delimiter(path));
     let parsed = parse_csv(&bytes, hint)
         .map_err(|e| LoadFailure::Engine(EngineError::Rejected(e.to_string())))?;
+    drop(bytes);
     let options = match stored {
         Some(stored) => CsvOptions {
             encoding: parsed.encoding,
@@ -163,23 +145,8 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
 }
 
 pub fn workbook_from_rows(mut rows: Vec<Vec<String>>) -> Result<Workbook, String> {
-    for field in rows.iter_mut().flatten() {
-        let rewritten = match import_input(field) {
-            Cow::Owned(text) => Some(text),
-            Cow::Borrowed(_) => None,
-        };
-        if let Some(text) = rewritten {
-            *field = text;
-        }
-    }
-    run_with_engine_stack(move || {
-        let mut workbook = Workbook::new_empty()?;
-        workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
-        workbook.warm_used_areas();
-        workbook.forget_changes();
-        Ok(workbook)
-    })
-    .map_err(|e| e.to_string())
+    prepare_import_inputs(&mut rows);
+    engine_workbook_from_rows(rows).map_err(|e| e.to_string())
 }
 
 // The read lock is held only while the shown cells are gathered; the write can take far
@@ -417,6 +384,7 @@ fn write_shown_rows(
 
 #[cfg(test)]
 mod tests {
+    use zenkai_engine::Engine;
     use zenkai_formats::{DecimalMark, Encoding};
     use zenkai_types::{ColIdx, Contents, RowIdx};
 
@@ -755,10 +723,10 @@ mod tests {
         assert!(read_with_stamp(&path, 8).is_ok());
         assert!(matches!(
             read_with_stamp(&path, 7),
-            Err(ReadStop::TooLarge(_))
+            Err(CsvReadError::TooLarge(_))
         ));
         assert_eq!(
-            ReadStop::TooLarge(600).message(&path),
+            read_error_message(CsvReadError::TooLarge(600), &path),
             CsvError::TooLarge(600).to_string()
         );
     }

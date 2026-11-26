@@ -330,6 +330,29 @@ mod tests {
             ),
             Err(CallError::Refused(ToolError::FileNotFound(_)))
         ));
+        std::fs::write(temp.path().join("sales.csv"), b"a,b\n1,2\n").unwrap();
+        std::fs::write(temp.path().join("sales.tsv"), b"a\tb\n1\t2\n").unwrap();
+        std::fs::write(temp.path().join("notes.txt"), b"a,b\n1,2\n").unwrap();
+        for name in ["sales.csv", "sales.tsv"] {
+            let request = parse_call(
+                "open_workbook",
+                object(serde_json::json!({ "path": name })),
+                Some(&folder),
+            )
+            .unwrap();
+            let ToolRequest::OpenWorkbook(path) = request else {
+                panic!("expected an open request for {name}, got {request:?}");
+            };
+            assert_eq!(path.path(), temp.path().join(name));
+        }
+        assert!(matches!(
+            parse_call(
+                "open_workbook",
+                object(serde_json::json!({ "path": "notes.txt" })),
+                Some(&folder)
+            ),
+            Err(CallError::Refused(ToolError::NotOpenableFile(_)))
+        ));
     }
 
     #[test]

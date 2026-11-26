@@ -9,7 +9,7 @@ use zenkai_engine::{
     Engine, EngineError, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
     run_with_engine_stack,
 };
-use zenkai_formats::Delimiter;
+use zenkai_formats::{Delimiter, tsv_delimiter};
 use zenkai_i18n::t;
 use zenkai_pdf_host::process::host_next_to_exe;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
@@ -147,10 +147,6 @@ pub fn is_delimited_text(path: &Path) -> bool {
 // Only csv and tsv open as themselves; a txt is imported into a new workbook.
 pub fn opens_as_itself(path: &Path) -> bool {
     matches!(extension(path).as_deref(), Some("csv" | "tsv"))
-}
-
-pub fn tsv_delimiter(path: &Path) -> Option<Delimiter> {
-    (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab)
 }
 
 pub fn export_delimiter(path: &Path) -> Delimiter {

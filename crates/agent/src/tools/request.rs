@@ -127,7 +127,7 @@ pub struct CreateWorkbook {
 #[serde(deny_unknown_fields)]
 pub struct OpenWorkbook {
     #[schemars(
-        description = "Path of a spreadsheet relative to the working folder, such as \"sales.xlsx\"."
+        description = "Path of a spreadsheet relative to the working folder, such as \"sales.xlsx\" or \"sales.csv\"."
     )]
     pub path: String,
 }

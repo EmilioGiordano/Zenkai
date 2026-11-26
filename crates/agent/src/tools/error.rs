@@ -117,7 +117,7 @@ pub enum ToolError {
     #[error("create_workbook makes .xlsx files; \"{0}\" has another extension")]
     NotNewWorkbookFile(String),
     #[error(
-        "\"{0}\" is not a spreadsheet Zenkai opens with this tool (.xlsx, .xlsm, .xls, .xlsb or .ods)"
+        "\"{0}\" is not a spreadsheet Zenkai opens with this tool (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv or .tsv)"
     )]
     NotOpenableFile(String),
     #[error("{count} sheets is more than the {limit} a new workbook may start with")]

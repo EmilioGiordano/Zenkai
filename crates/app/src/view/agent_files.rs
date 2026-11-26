@@ -3,22 +3,46 @@ use std::sync::Arc;
 
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_agent::settings::PermissionMode;
 use zenkai_agent::tools::{
     self, InsidePath, NewWorkbook, OpenedWorkbook, Opening, ReadOnlyReason, ToolCall, ToolError,
     ToolReply, WorkbookId, WorkingFolder,
 };
-use zenkai_engine::Engine;
+use zenkai_engine::{Engine, XlsxReader};
 use zenkai_i18n::t;
 
 use super::agent_calls::Change;
 use super::{Workspace, file_label};
 use crate::agent_folder::FoundFile;
 use crate::agent_settings;
+use crate::csv_io;
 use crate::document::Document;
-use crate::entry::display_name;
+use crate::entry::{CsvLoad, display_name};
 use crate::failure::open_failure;
-use crate::files::{self, FileLoad};
+use crate::files::{self, FileLoad, LoadFailure};
+
+fn load_agent_file(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
+    if files::opens_as_itself(path) {
+        csv_io::load_csv(path, None)
+    } else {
+        files::load_workbook(path, reader, &Arc::default())
+    }
+}
+
+fn apply_loaded_document(
+    document: &mut Document,
+    read_only: bool,
+    origin: FileOrigin,
+    csv: Option<CsvLoad>,
+) {
+    document.read_only = read_only;
+    document.origin = origin;
+    if let Some(csv) = csv {
+        document.bind_csv(csv.options);
+        document.guard_file(csv.seen);
+    }
+}
 
 fn sheet_names(document: Option<&Document>) -> Vec<String> {
     document.map_or_else(Vec::new, |document| {
@@ -118,7 +142,7 @@ impl Workspace {
             let task_path = path.path().to_path_buf();
             let loaded = cx
                 .background_executor()
-                .spawn(async move { files::load_workbook(&task_path, reader, &Arc::default()) })
+                .spawn(async move { load_agent_file(&task_path, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.open_loads.finish(open);
@@ -158,12 +182,12 @@ impl Workspace {
             unsupported,
             read_only,
             origin,
-            ..
+            reader_fallback: _,
+            csv,
         } = file;
         let id = self.open_document(workbook, Some(path.to_path_buf()), unsupported, window, cx);
         if let Some(document) = self.documents.get_mut(id) {
-            document.read_only = read_only;
-            document.origin = origin;
+            apply_loaded_document(document, read_only, origin, csv);
         }
         self.remember_recent(path, cx);
         id
@@ -238,4 +262,128 @@ fn opened(id: WorkbookId, how: Opening, path: &InsidePath, sheets: Vec<String>) 
         path: tools::relative_text(path),
         sheets,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use zenkai_engine::{Engine, Workbook, XlsxReader};
+    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
+    use zenkai_types::{CellPos, CellView, Contents, SheetId, ValueKind};
+
+    // Not `super::*`: it would bring in gpui's `test` macro and `#[test]` would expand to itself.
+    use super::{apply_loaded_document, load_agent_file};
+    use crate::csv_save::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
+    use crate::document::ChangedFile;
+    use crate::documents::Documents;
+
+    fn cell(workbook: &Workbook, a1: &str) -> CellView {
+        workbook.cell(SheetId(0), CellPos::parse_a1(a1).unwrap())
+    }
+
+    fn number_at(workbook: &Workbook, a1: &str) -> Option<f64> {
+        let pos = CellPos::parse_a1(a1).unwrap();
+        match workbook.contents(SheetId(0)).unwrap()(pos) {
+            Contents::Number(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn agent_load_reads_csv_with_detected_options_and_keeps_signed_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sales.csv");
+        std::fs::write(
+            &path,
+            b"name;date;amount;phone;note\r\nJos\xe9;25/10/2026;1.234,5;+34 600;-abc\r\nM\xe1laga;08/10/2026;-3,5;+5;-\r\n",
+        )
+        .unwrap();
+
+        let loaded = load_agent_file(&path, XlsxReader::Fast).unwrap();
+        assert!(!loaded.read_only);
+        assert!(loaded.unsupported.is_empty());
+        let csv = loaded.csv.unwrap();
+        assert_eq!(csv.options.delimiter, Delimiter::Semicolon);
+        assert_eq!(csv.options.encoding, Encoding::Windows1252);
+        assert_eq!(csv.options.line_ending, LineEnding::Crlf);
+        assert_eq!(csv.options.decimal_mark, DecimalMark::Comma);
+        assert_eq!(csv.options.date_order, DateOrder::DayFirst);
+
+        assert_eq!(cell(&loaded.workbook, "A2").text, "José");
+        assert_eq!(number_at(&loaded.workbook, "B2"), Some(46320.0));
+        assert_eq!(number_at(&loaded.workbook, "C2"), Some(1234.5));
+        let phone = cell(&loaded.workbook, "D2");
+        assert_eq!(phone.kind, ValueKind::Text);
+        assert_eq!(phone.text, "+34 600");
+        let note = cell(&loaded.workbook, "E2");
+        assert_eq!(note.kind, ValueKind::Text);
+        assert_eq!(note.text, "-abc");
+        assert_eq!(cell(&loaded.workbook, "A3").text, "Málaga");
+        assert_eq!(number_at(&loaded.workbook, "B3"), Some(46303.0));
+        assert_eq!(number_at(&loaded.workbook, "C3"), Some(-3.5));
+        assert_eq!(number_at(&loaded.workbook, "D3"), Some(5.0));
+        let dash = cell(&loaded.workbook, "E3");
+        assert_eq!(dash.kind, ValueKind::Text);
+        assert_eq!(dash.text, "-");
+    }
+
+    #[test]
+    fn agent_load_reads_tsv_with_tab_delimiter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("contacts.tsv");
+        std::fs::write(&path, b"name\tcity\tphone\nAna\tMadrid, ES\t+34 600\n").unwrap();
+
+        let loaded = load_agent_file(&path, XlsxReader::Fast).unwrap();
+        let csv = loaded.csv.unwrap();
+        assert_eq!(csv.options.delimiter, Delimiter::Tab);
+        assert_eq!(csv.options.encoding, Encoding::Utf8);
+        assert_eq!(csv.options.line_ending, LineEnding::Lf);
+        assert_eq!(cell(&loaded.workbook, "B2").text, "Madrid, ES");
+        let phone = cell(&loaded.workbook, "C2");
+        assert_eq!(phone.kind, ValueKind::Text);
+        assert_eq!(phone.text, "+34 600");
+    }
+
+    #[test]
+    fn agent_opened_csv_is_bound_to_its_path_and_saves_back_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prices.csv");
+        let original = b"item;price;phone\nCaf\xe9;1,5;+34 600\n";
+        std::fs::write(&path, original).unwrap();
+
+        let loaded = load_agent_file(&path, XlsxReader::Fast).unwrap();
+        let expected_options = loaded.csv.as_ref().unwrap().options;
+        let mut documents = Documents::new(Workbook::new_empty().unwrap());
+        let id = documents.open(loaded.workbook, Some(path.clone()), loaded.unsupported);
+        let document = documents.get_mut(id).unwrap();
+        apply_loaded_document(document, loaded.read_only, loaded.origin, loaded.csv);
+
+        assert_eq!(document.path.as_deref(), Some(path.as_path()));
+        assert!(!document.read_only);
+        assert!(document.file_guard().is_some());
+        let binding = document.csv.clone().unwrap();
+        assert_eq!(binding.options, Some(expected_options));
+        assert!(binding.file_sheet.is_some());
+
+        let saved = save_csv_file(
+            &document.shared_workbook(),
+            &CsvSaveRequest {
+                path: path.clone(),
+                binding,
+                sheets: document.sheets.len(),
+                sheet: document.sheet,
+                changed: ChangedFile::Ask,
+                large: LargeWrite::Ask,
+                guard: document.file_guard(),
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let CsvSave::Written(_, options, _, _) = saved else {
+            panic!("expected a clean csv save");
+        };
+        assert_eq!(options, expected_options);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
 }

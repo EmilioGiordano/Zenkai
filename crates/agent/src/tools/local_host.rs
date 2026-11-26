@@ -1,16 +1,22 @@
+use std::io::ErrorKind;
+
 use async_channel::Receiver;
-use zenkai_engine::{Engine, Workbook, open_xlsx};
-use zenkai_types::{Range, SheetId};
+use zenkai_engine::{Engine, Workbook, open_xlsx, workbook_from_rows};
+use zenkai_formats::{
+    CsvReadError, MAX_CSV_BYTES, apply, guess, parse_csv, prepare_import_inputs, read_csv_bytes,
+    tsv_delimiter,
+};
+use zenkai_types::{Range, SheetId, WorkbookId};
 
 use crate::tools::channel::{ToolCall, ToolResult};
 use crate::tools::error::{AgentAccess, ToolError};
+use crate::tools::folder::InsidePath;
 use crate::tools::reply::{OpenedWorkbook, Opening, ToolReply};
 use crate::tools::request::ToolRequest;
 use crate::tools::{
     WorkbookPlace, check_workbook, create_workbook_file, plan_write, read, relative_text,
     workbook_summary,
 };
-use zenkai_types::WorkbookId;
 
 // Serves tools straight on a workbook, writes approved automatically: what Zenkai's
 // UI thread does, minus the window, so tools can be tested without one.
@@ -65,9 +71,7 @@ impl LocalHost {
                 Ok(self.replace(workbook, relative_text(&new.path), Opening::Created))
             }
             ToolRequest::OpenWorkbook(path) => {
-                let workbook = open_xlsx(path.path())
-                    .map_err(|error| ToolError::Engine(error.to_string()))?
-                    .workbook;
+                let workbook = open_file(path)?;
                 Ok(self.replace(workbook, relative_text(path), Opening::Opened))
             }
         }
@@ -98,4 +102,30 @@ impl LocalHost {
         }
         self
     }
+}
+
+fn open_file(path: &InsidePath) -> Result<Workbook, ToolError> {
+    if matches!(path.extension().as_deref(), Some("csv" | "tsv")) {
+        open_csv(path)
+    } else {
+        open_xlsx(path.path())
+            .map(|opened| opened.workbook)
+            .map_err(|error| ToolError::Engine(error.to_string()))
+    }
+}
+
+fn open_csv(path: &InsidePath) -> Result<Workbook, ToolError> {
+    let bytes = read_csv_bytes(path.path(), MAX_CSV_BYTES).map_err(|error| match error {
+        CsvReadError::Io(source) if source.kind() == ErrorKind::NotFound => {
+            ToolError::FileNotFound(relative_text(path))
+        }
+        other => ToolError::File(other.to_string()),
+    })?;
+    let parsed = parse_csv(&bytes, tsv_delimiter(path.path()))
+        .map_err(|error| ToolError::File(error.to_string()))?;
+    let guessed = guess(&parsed);
+    let mut rows = parsed.rows;
+    apply(guessed.decimal_mark, guessed.date_order, &mut rows);
+    prepare_import_inputs(&mut rows);
+    workbook_from_rows(rows).map_err(|error| ToolError::Engine(error.to_string()))
 }

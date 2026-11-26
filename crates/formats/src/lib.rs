@@ -8,10 +8,12 @@ mod numbers;
 mod values;
 
 pub use csv_format::{
-    CsvError, Delimiter, Encoding, Fidelity, FinalNewline, LineEnding, MAX_CSV_BYTES, ParsedCsv,
-    parse_csv,
+    CsvError, CsvReadError, Delimiter, Encoding, Fidelity, FinalNewline, LineEnding, MAX_CSV_BYTES,
+    ParsedCsv, parse_csv, read_csv_bytes, tsv_delimiter,
 };
-pub use csv_guess::{DecimalMark, Guess, apply, guess, import_input, number_text};
+pub use csv_guess::{
+    DecimalMark, Guess, apply, guess, import_input, number_text, prepare_import_inputs,
+};
 pub use csv_write::{CsvFormat, CsvWriter, neutralize, write_csv};
 pub use dates::{
     DateOrder, date_serial, day_first_field, detect_date_order, iso_date, normalize_day_first,
