@@ -103,14 +103,17 @@ enum Stage {
 pub(crate) struct SheetWriter<'a, W: Write> {
     inner: W,
     settings: Option<&'a SheetSettings>,
+    // The <sheetPr> element, see `sheet_properties`.
+    properties: String,
     stage: Stage,
 }
 
 impl<'a, W: Write> SheetWriter<'a, W> {
-    pub(crate) fn new(inner: W, settings: Option<&'a SheetSettings>) -> Self {
+    pub(crate) fn new(inner: W, settings: Option<&'a SheetSettings>, properties: String) -> Self {
         SheetWriter {
             inner,
             settings,
+            properties,
             stage: Stage::Head(Vec::new()),
         }
     }
@@ -149,6 +152,7 @@ impl<'a, W: Write> SheetWriter<'a, W> {
                     };
                     let rest = head.split_off(at + SHEET_DATA.len());
                     let head = String::from_utf8(std::mem::take(head)).map_err(other_utf8)?;
+                    let head = with_properties(head, &self.properties)?;
                     let head = match self.settings {
                         Some(settings) => with_head_settings(head, settings)?,
                         None => head,
@@ -235,10 +239,28 @@ pub(crate) fn with_row_outline(
     Ok(out)
 }
 
-// The places below are where IronCalc's exporter writes these elements' neighbours;
-// CT_Worksheet requires its children in a fixed order.
-fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<String> {
-    let mut head = head;
+// The sheet's <sheetPr>: the one carried from the file, with Excel's filterMode flag on
+// while the sheet's AutoFilter hides rows and off otherwise.
+pub(crate) fn sheet_properties(settings: Option<&SheetSettings>, sheet: &Worksheet) -> String {
+    let carried = settings.map_or("", |settings| settings.properties.as_str());
+    let filtering = sheet
+        .auto_filter
+        .as_ref()
+        .is_some_and(|filter| filter.has_criteria() && !filter.filtered_rows.is_empty());
+    if !filtering {
+        return carried.to_string();
+    }
+    match carried.strip_prefix("<sheetPr>") {
+        Some(inner) => format!(r#"<sheetPr filterMode="1">{inner}"#),
+        None => r#"<sheetPr filterMode="1"/>"#.to_string(),
+    }
+}
+
+// <sheetPr> is the root's first child.
+fn with_properties(mut head: String, properties: &str) -> io::Result<String> {
+    if properties.is_empty() {
+        return Ok(head);
+    }
     let root = head
         .find("<worksheet")
         .ok_or_else(|| other("the written sheet has no root"))?;
@@ -247,7 +269,14 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
         .ok_or_else(|| other("the written root is not closed"))?
         + root
         + 1;
-    head.insert_str(root_end, &settings.properties);
+    head.insert_str(root_end, properties);
+    Ok(head)
+}
+
+// The places below are where IronCalc's exporter writes these elements' neighbours;
+// CT_Worksheet requires its children in a fixed order.
+fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<String> {
+    let mut head = head;
     let view = r#"<sheetView workbookViewId="0""#;
     let at = head
         .find(view)
@@ -406,7 +435,8 @@ mod tests {
     }
 
     fn streamed(xml: &str, settings: Option<&SheetSettings>, piece: usize) -> String {
-        let mut writer = SheetWriter::new(Vec::new(), settings);
+        let properties = settings.map_or(String::new(), |s| s.properties.clone());
+        let mut writer = SheetWriter::new(Vec::new(), settings, properties);
         for chunk in xml.as_bytes().chunks(piece) {
             std::io::Write::write_all(&mut writer, chunk).unwrap();
         }
@@ -432,7 +462,7 @@ mod tests {
 
     #[test]
     fn a_sheet_without_its_data_end_is_an_error() {
-        let mut writer = SheetWriter::new(Vec::new(), None);
+        let mut writer = SheetWriter::new(Vec::new(), None, String::new());
         std::io::Write::write_all(&mut writer, b"<worksheet><sheetData><row r=\"1\">").unwrap();
         assert!(writer.finish().is_err());
     }

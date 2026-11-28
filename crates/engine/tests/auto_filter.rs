@@ -722,3 +722,16 @@ proptest! {
         prop_assert_eq!(filter_snapshot(&book), end);
     }
 }
+
+#[test]
+fn a_sheet_is_saved_in_filter_mode_only_while_its_filter_hides_rows() {
+    let mut book = people();
+    let filter_mode = r#"<sheetPr filterMode="1"/>"#;
+    assert!(!files::sheet_xml(&book.to_xlsx().unwrap()).contains("filterMode"));
+    book.set_column_filter(SHEET, col('A'), shown(&["x"], false))
+        .unwrap();
+    assert!(files::sheet_xml(&book.to_xlsx().unwrap()).contains(filter_mode));
+    book.set_column_filter(SHEET, col('A'), shown(&["x", "y", "z"], true))
+        .unwrap();
+    assert!(!files::sheet_xml(&book.to_xlsx().unwrap()).contains("filterMode"));
+}

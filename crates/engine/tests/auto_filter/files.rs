@@ -148,6 +148,7 @@ fn open_and_save_keep_the_filter_and_the_rows_it_hides() {
     let written = sheet_xml(&book.to_xlsx().unwrap());
     for xml in [copied, written] {
         assert!(xml.contains(BY_NAME), "{xml}");
+        assert!(xml.contains(r#"<sheetPr filterMode="1"/>"#), "{xml}");
         for number in [3, 5, 9] {
             assert!(row_tag(&xml, number).contains(r#"hidden="1""#), "{xml}");
         }
@@ -174,9 +175,15 @@ fn every_save_after_an_edit_writes_the_filter_as_it_is_now() {
     assert_eq!(hidden_rows(&reopened), [2, 4, 5, 6, 9]);
     assert_eq!(reopened.auto_filter(SHEET), book.auto_filter(SHEET));
 
+    book.clear_filters(SHEET).unwrap();
+    let xml = sheet_xml(&saved(&book, dir.path()));
+    assert!(xml.contains(r#"<autoFilter ref="A1:C6"/>"#), "{xml}");
+    assert!(!xml.contains("filterMode"), "{xml}");
+
     book.toggle_auto_filter(SHEET, range("A1:C6")).unwrap();
     let xml = sheet_xml(&saved(&book, dir.path()));
     assert!(!xml.contains("<autoFilter"), "{xml}");
+    assert!(!xml.contains("filterMode"), "{xml}");
     assert!(row_tag(&xml, 9).contains(r#"hidden="1""#), "{xml}");
 }
 
