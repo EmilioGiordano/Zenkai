@@ -2827,19 +2827,47 @@ mod tests {
         io::{BufRead, BufReader},
     };
 
-    use super::implemented_function_names;
-    use crate::language::get_default_language;
+    use std::collections::BTreeSet;
+
+    use super::{implemented_function_names, Function};
+    use crate::{language::get_default_language, test::util::new_empty_model};
 
     #[test]
-    fn implemented_function_names_resolve_and_leave_out_the_stubs() {
+    fn implemented_function_names_resolve_and_are_listed_once() {
         let names = implemented_function_names();
         let functions = &get_default_language().functions;
         for name in &names {
             assert!(functions.lookup(name).is_some(), "{name} does not resolve");
         }
+        let distinct: BTreeSet<&String> = names.iter().collect();
+        assert_eq!(distinct.len(), names.len(), "a function is listed twice");
         assert!(names.iter().any(|name| name == "TEXTBEFORE"));
         assert!(names.iter().any(|name| name == "STDEV.S"));
-        assert!(!names.iter().any(|name| name.starts_with("FORECAST.ETS")));
+    }
+
+    #[test]
+    fn implemented_function_names_leave_out_exactly_the_stubs() {
+        let language = get_default_language();
+        let every_name: Vec<String> = Function::into_iter()
+            .map(|function| function.to_localized_name(language))
+            .collect();
+        let mut model = new_empty_model();
+        for (index, name) in every_name.iter().enumerate() {
+            model._set(&format!("A{}", index + 1), &format!("={name}()"));
+        }
+        model.evaluate();
+        let stubs: BTreeSet<&String> = every_name
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| model._get_text(&format!("A{}", index + 1)) == "#N/IMPL!")
+            .map(|(_, name)| name)
+            .collect();
+        let implemented = implemented_function_names();
+        let left_out: BTreeSet<&String> = every_name
+            .iter()
+            .filter(|name| !implemented.contains(name))
+            .collect();
+        assert_eq!(stubs, left_out);
     }
 
     #[test]
