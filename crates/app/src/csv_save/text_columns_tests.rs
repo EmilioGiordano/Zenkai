@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 use proptest::prelude::*;
 use zenkai_engine::{Engine, Workbook};
 use zenkai_formats::{CsvFormat, CsvWriter, Delimiter, Encoding, LineEnding, TextColumns};
-use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, ValueKind};
+use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, ValueKind};
 
 use super::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
 use crate::csv_io;
@@ -17,6 +17,10 @@ use crate::entry::CsvLoad;
 
 fn chosen(columns: &[u16]) -> TextColumns {
     TextColumns::chosen(columns.iter().filter_map(|column| ColIdx::new(*column)))
+}
+
+fn at_pos(row: u32, col: u16) -> CellPos {
+    CellPos::new(RowIdx::new(row).unwrap(), ColIdx::new(col).unwrap())
 }
 
 fn at(row: i64, col: i64) -> CellPos {
@@ -342,4 +346,37 @@ fn a_file_opened_with_nothing_stored_has_its_ids_as_text() {
     std::fs::write(&path, b"name,code\nAna,00123\n").unwrap();
     let load = csv_io::load_csv(&path, None).unwrap();
     assert_text(&load.workbook, at(1, 1), "00123");
+}
+
+#[test]
+fn sorting_text_cells_keeps_them_text_and_the_fields_as_they_were() {
+    let original = b"code,name\n00123,Bob\n=1+1,Ana\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, TextColumns::Everything);
+    let range = Range::new(at_pos(1, 0), at_pos(2, 1));
+    workbook
+        .sort(SheetId(0), range, ColIdx::clamped(1), false)
+        .unwrap();
+    assert_text(&workbook, at(1, 0), "=1+1");
+    assert_text(&workbook, at(2, 0), "00123");
+    let mut asked = request(&path, &csv);
+    asked.binding.accepted.moved_cells = true;
+    let (bytes, _) = saved_as(&asked, workbook);
+    assert_eq!(bytes, b"code,name\n=1+1,Ana\n00123,Bob\n");
+}
+
+#[test]
+fn filling_down_text_cells_keeps_them_text() {
+    let original = b"code\n00123\n=1+1\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, TextColumns::Everything);
+    workbook
+        .fill(SheetId(0), Range::single(at_pos(2, 0)), true)
+        .unwrap();
+    assert_text(&workbook, at(2, 0), "00123");
+    let mut asked = request(&path, &csv);
+    asked.binding.accepted.number_formats = true;
+    asked.binding.accepted.formatting = true;
+    let (bytes, _) = saved_as(&asked, workbook);
+    assert_eq!(bytes, b"code\n00123\n00123\n");
 }
