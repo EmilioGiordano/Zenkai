@@ -654,9 +654,17 @@ pub fn function_names() -> impl Iterator<Item = &'static str> {
     FUNCTIONS.iter().map(|(name, _)| *name)
 }
 
+/// The arguments of `name`, as Excel's tooltip shows them between the parentheses.
+pub fn arguments(name: &str) -> Option<&'static str> {
+    FUNCTIONS
+        .iter()
+        .find(|(function, _)| *function == name)
+        .map(|(_, arguments)| *arguments)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{function_names, suggestions, token_at};
+    use super::{arguments, function_names, suggestions, token_at};
 
     #[test]
     fn finds_the_name_being_typed() {
@@ -689,5 +697,16 @@ mod tests {
     fn lists_each_function_once_in_order() {
         let names: Vec<&str> = function_names().collect();
         assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn shows_the_arguments_as_excel_does() {
+        assert_eq!(arguments("SUM"), Some("number1, [number2], ..."));
+        assert_eq!(
+            arguments("TEXTBEFORE"),
+            Some("text, delimiter, [instance_num], [match_mode], [match_end], [if_not_found]")
+        );
+        assert_eq!(arguments("PI"), Some(""));
+        assert_eq!(arguments("NOPE"), None);
     }
 }

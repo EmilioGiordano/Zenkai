@@ -1284,12 +1284,15 @@ impl Grid {
         let left = right - self.layout.col_width(editor.pos.col);
         let theme = cx.theme();
         let highlighted = self.suggestion.min(suggestions.len() - 1);
+        let name = suggestions[highlighted];
+        let signature =
+            autocomplete::arguments(name).map(|arguments| format!("{name}({arguments})"));
         Some(
             div()
                 .absolute()
                 .left(px(left * self.zoom))
                 .top(px(bottom * self.zoom + 2.0))
-                .min_w(px(160.0))
+                .w(px(320.0))
                 .py_1()
                 .bg(theme.popover)
                 .border_1()
@@ -1305,6 +1308,17 @@ impl Grid {
                             row.bg(theme.accent).text_color(theme.accent_foreground)
                         })
                         .child(name)
+                }))
+                .children(signature.map(|signature| {
+                    div()
+                        .mt_1()
+                        .px_2()
+                        .pt_1()
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(signature)
                 })),
         )
     }
