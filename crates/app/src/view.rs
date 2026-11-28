@@ -1631,7 +1631,7 @@ impl Workspace {
                         &mut rows,
                     );
                     // On failure, parse again so the preview comes back as it was.
-                    let result = csv_io::workbook_from_rows(rows).map_err(|error| {
+                    let result = csv_io::workbook_from_rows(rows, &reading.text).map_err(|error| {
                         (error, parse_csv(&task_bytes, Some(reading.delimiter)).ok())
                     });
                     (result, origin)

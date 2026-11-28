@@ -1266,7 +1266,7 @@ pub(crate) mod tests {
             &options.text,
             &mut rows,
         );
-        let workbook = csv_io::workbook_from_rows(rows).unwrap();
+        let workbook = csv_io::workbook_from_rows(rows, &options.text).unwrap();
         let mut document = crate::document::Document::new(
             zenkai_types::WorkbookId(0),
             crate::spaces::SpaceId(0),
