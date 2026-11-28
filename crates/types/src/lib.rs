@@ -243,11 +243,10 @@ pub enum VAlign {
 impl Rgb {
     pub fn parse_hex(text: &str) -> Option<Rgb> {
         let hex = text.trim_start_matches('#');
-        let hex = if hex.len() == 8 { &hex[2..] } else { hex };
-        (hex.len() == 6)
-            .then(|| u32::from_str_radix(hex, 16).ok())
-            .flatten()
-            .map(Rgb)
+        if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        u32::from_str_radix(&hex[hex.len() - 6..], 16).ok().map(Rgb)
     }
 }
 
@@ -478,6 +477,23 @@ impl Language {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hex_color_is_six_ascii_digits_with_an_optional_alpha_and_never_panics() {
+        assert_eq!(Rgb::parse_hex("#4472C4"), Some(Rgb(0x4472C4)));
+        assert_eq!(Rgb::parse_hex("FF4472C4"), Some(Rgb(0x4472C4)));
+        for hostile in [
+            "#a\u{e9}aaaaa",
+            "#\u{e9}\u{e9}\u{e9}\u{e9}",
+            "\u{e9}aaaaaa",
+            "#+12345",
+            "#12345",
+            "",
+            "#",
+        ] {
+            assert_eq!(Rgb::parse_hex(hostile), None, "{hostile:?}");
+        }
+    }
 
     #[test]
     fn ranges_intersect_only_where_they_overlap() {

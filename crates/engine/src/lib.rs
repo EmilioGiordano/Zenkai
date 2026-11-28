@@ -30,6 +30,7 @@ mod shown_cells;
 mod streamed_write;
 mod style_growth;
 mod table_headers;
+mod theme_slots;
 #[cfg(test)]
 mod used_end_property;
 mod workbook;

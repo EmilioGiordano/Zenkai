@@ -487,3 +487,73 @@ fn a_sheet_keeps_its_color_when_moved_and_when_a_delete_is_undone() {
     book.undo().unwrap();
     assert_eq!(colors(&book), [Some(GREEN), None, None]);
 }
+
+// Rewrites the text parts of a file the writer made.
+fn rewritten(path: &Path, edit: impl Fn(&str, String) -> String) {
+    let bytes = std::fs::read(path).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut body = String::new();
+        entry.read_to_string(&mut body).unwrap();
+        out.start_file(name.clone(), options).unwrap();
+        out.write_all(edit(&name, body).as_bytes()).unwrap();
+    }
+    std::fs::write(path, out.finish().unwrap().into_inner()).unwrap();
+}
+
+fn one_themed_sheet(path: &Path) {
+    let mut book = Source::new();
+    let sheet = book.add_worksheet();
+    sheet.write_number(0, 0, 1.0).unwrap();
+    sheet.set_tab_color(Color::Theme(4, 3));
+    book.save(path).unwrap();
+}
+
+#[test]
+fn a_theme_slot_the_file_makes_unreadable_does_not_panic_the_color_of_a_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    for (case, slot) in [
+        ("bad digits", r#"<a:srgbClr val="zz"/>"#),
+        ("empty", r#"<a:srgbClr val=""/>"#),
+        ("system color", r#"<a:sysClr val="windowText"/>"#),
+        ("non ascii", "<a:srgbClr val=\"\u{e9}\u{e9}\u{e9}\"/>"),
+    ] {
+        let path = dir.path().join("themed.xlsx");
+        one_themed_sheet(&path);
+        rewritten(&path, |name, body| {
+            if name != "xl/theme/theme1.xml" {
+                return body;
+            }
+            let start = body.find("<a:accent1>").unwrap();
+            let end = body.find("</a:accent1>").unwrap();
+            format!("{}<a:accent1>{slot}{}", &body[..start], &body[end..])
+        });
+        for reader in READERS {
+            let book = open(&path, reader);
+            assert!(book.sheets()[0].color.is_some(), "{case}: {reader:?}");
+        }
+    }
+}
+
+#[test]
+fn a_tab_color_that_is_not_a_color_is_no_color() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("plain.xlsx");
+    one_themed_sheet(&path);
+    rewritten(&path, |name, body| {
+        if name != "xl/worksheets/sheet1.xml" {
+            return body;
+        }
+        let start = body.find("<tabColor").unwrap();
+        let end = start + body[start..].find("/>").unwrap() + 2;
+        format!("{}<tabColor rgb=\"zz\"/>{}", &body[..start], &body[end..])
+    });
+    for reader in READERS {
+        let book = open(&path, reader);
+        assert_eq!(book.sheets()[0].color, None, "{reader:?}");
+    }
+}

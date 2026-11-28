@@ -2340,7 +2340,8 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
     }
 }
 
-fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
+fn engine_model(mut book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
+    crate::theme_slots::sanitize(&mut book.theme);
     Model::from_workbook(book, LANGUAGE).map_err(model_error)
 }
 
