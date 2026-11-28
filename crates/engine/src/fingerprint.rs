@@ -427,9 +427,20 @@ pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
         theme,
     } = book;
     let mut hasher = DefaultHasher::new();
+    // workbook.xml names each AutoFilter's range in `_xlnm._FilterDatabase`.
     let sheets: Vec<_> = worksheets
         .iter()
-        .map(|sheet| (&sheet.name, sheet.sheet_id, &sheet.state))
+        .map(|sheet| {
+            let filter = sheet.auto_filter.as_ref().map(|filter| {
+                (
+                    filter.first_row,
+                    filter.first_column,
+                    filter.last_row,
+                    filter.last_column,
+                )
+            });
+            (&sheet.name, sheet.sheet_id, &sheet.state, filter)
+        })
         .collect();
     let tables: BTreeMap<_, _> = tables.iter().collect();
     hash_debug(&mut hasher, &(&sheets, defined_names, &tables, name))?;
