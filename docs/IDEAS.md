@@ -93,3 +93,8 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
 14. **Formula Bar in Settings.** The View command Formula Bar is only in the command palette;
     a row in the Settings window, next to the other general options, would show it where
     people look for display settings.
+
+15. **Reapply the filter (Ctrl+Alt+L).** Excel's Reapply runs the filter again after the data
+    changed, because rows that were filtered in or out do not move when a cell is edited.
+    Zenkai keeps the rows as they were until the filter is applied again from its list, so a
+    Reapply command in the Data group, bound to Ctrl+Alt+L as in Excel, would close the gap.

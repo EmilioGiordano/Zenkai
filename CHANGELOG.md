@@ -20,6 +20,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   off opens without them, and the View commands Gridlines, Formula Bar and Headings in the
   command palette turn them on and off, saved back to the file (Formula Bar is remembered by
   the app, never in a file) ([#335](https://github.com/EmilioGiordano/Zenkai/issues/335)).
+- AutoFilter: Ctrl+Shift+L (Cmd+Shift+F on macOS) and Data > Filter in the command palette turn
+  filter buttons on the header row of the current region or the selection. Each button opens a
+  list of the column's values with search, Select All, Sort A to Z and Z to A, and Clear filter;
+  filtered rows hide, row numbers turn blue and the status bar says "N of M records found".
+  Typing, Delete, Fill, Copy, Cut, single-value Paste and the status bar totals touch the
+  visible rows only, and pasting several rows into hidden ones is refused. A filter made in
+  Excel opens filtered and is kept when the file is saved
+  ([#340](https://github.com/EmilioGiordano/Zenkai/issues/340)).
+- Ctrl+Shift+L now filters while the grid has the focus, so the agent chat also answers to
+  the new Ctrl+Alt+J in every context; Ctrl+Shift+L still focuses the chat anywhere outside
+  the grid ([#340](https://github.com/EmilioGiordano/Zenkai/issues/340)).
 
 ### Safety
 
