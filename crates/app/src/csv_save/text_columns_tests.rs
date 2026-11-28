@@ -15,6 +15,10 @@ use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::document::ChangedFile;
 use crate::entry::CsvLoad;
 
+fn chosen(columns: &[u16]) -> TextColumns {
+    TextColumns::chosen(columns.iter().filter_map(|column| ColIdx::new(*column)))
+}
+
 fn at(row: i64, col: i64) -> CellPos {
     CellPos::new(RowIdx::clamped(row), ColIdx::clamped(col))
 }
@@ -53,8 +57,8 @@ fn opened_as_comma(dir: &Path, original: &[u8], text: TextColumns) -> (PathBuf, 
     )
 }
 
-fn saved(path: &Path, workbook: Workbook, csv: &CsvLoad) -> Vec<u8> {
-    let asked = CsvSaveRequest {
+fn request(path: &Path, csv: &CsvLoad) -> CsvSaveRequest {
+    CsvSaveRequest {
         path: path.to_path_buf(),
         binding: CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet),
         sheets: 1,
@@ -62,10 +66,20 @@ fn saved(path: &Path, workbook: Workbook, csv: &CsvLoad) -> Vec<u8> {
         changed: ChangedFile::Ask,
         large: LargeWrite::Ask,
         guard: Some(csv.seen),
+    }
+}
+
+// The bytes written, and the options the file was written with.
+fn saved_as(asked: &CsvSaveRequest, workbook: Workbook) -> (Vec<u8>, CsvOptions) {
+    let outcome = save_csv_file(&RwLock::new(workbook), asked, &AtomicBool::new(false)).unwrap();
+    let CsvSave::Written(_, options, ..) = outcome else {
+        panic!("the save was not written");
     };
-    let outcome = save_csv_file(&RwLock::new(workbook), &asked, &AtomicBool::new(false)).unwrap();
-    assert!(matches!(outcome, CsvSave::Written(..)));
-    std::fs::read(path).unwrap()
+    (std::fs::read(&asked.path).unwrap(), options)
+}
+
+fn saved(path: &Path, workbook: Workbook, csv: &CsvLoad) -> Vec<u8> {
+    saved_as(&request(path, csv), workbook).0
 }
 
 fn assert_text(workbook: &Workbook, pos: CellPos, expected: &str) {
@@ -79,7 +93,7 @@ fn assert_text(workbook: &Workbook, pos: CellPos, expected: &str) {
 fn a_leading_zero_id_and_a_19_digit_id_open_as_shown_and_save_unchanged() {
     let original = b"name,code,id\nAna,00123,9223372036854775807\nLuis,0045,1234567890123456789\n";
     let dir = tempfile::tempdir().unwrap();
-    let (path, workbook, csv) = opened_with(dir.path(), original, TextColumns::chosen([1, 2]));
+    let (path, workbook, csv) = opened_with(dir.path(), original, chosen(&[1, 2]));
     assert_text(&workbook, at(1, 1), "00123");
     assert_text(&workbook, at(1, 2), "9223372036854775807");
     assert_text(&workbook, at(2, 1), "0045");
@@ -120,7 +134,7 @@ fn the_same_file_read_as_general_turns_the_ids_into_numbers() {
 fn a_text_column_keeps_what_decimal_and_date_reading_would_rewrite() {
     let original = b"price;when;note\n1,50;08/10/2026;x\n2,25;25/10/2026;y\n";
     let dir = tempfile::tempdir().unwrap();
-    let (path, workbook, csv) = opened_with(dir.path(), original, TextColumns::chosen([0, 1]));
+    let (path, workbook, csv) = opened_with(dir.path(), original, chosen(&[0, 1]));
     assert_text(&workbook, at(1, 0), "1,50");
     assert_text(&workbook, at(1, 1), "08/10/2026");
     assert_eq!(saved(&path, workbook, &csv), original);
@@ -151,7 +165,7 @@ fn keep_everything_as_text_opens_formulas_signs_and_numbers_as_written() {
 fn the_choices_stored_in_the_session_read_the_file_the_same_way_on_reopening() {
     let original = b"code,qty\n00123,5\n0007,6\n";
     let dir = tempfile::tempdir().unwrap();
-    let (path, _, csv) = opened_with(dir.path(), original, TextColumns::chosen([0]));
+    let (path, _, csv) = opened_with(dir.path(), original, chosen(&[0]));
     let stored = serde_json::to_string(&CsvBinding::new(csv.options.clone())).unwrap();
     let restored: CsvBinding = serde_json::from_str(&stored).unwrap();
     let mut again = csv_io::load_csv(&path, restored.options).unwrap();
@@ -167,7 +181,7 @@ fn the_choices_stored_in_the_session_read_the_file_the_same_way_on_reopening() {
 fn an_edited_text_cell_is_written_as_typed_and_the_rest_stays() {
     let original = b"code,qty\n00123,5\n0007,6\n";
     let dir = tempfile::tempdir().unwrap();
-    let (path, mut workbook, csv) = opened_with(dir.path(), original, TextColumns::chosen([0]));
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, chosen(&[0]));
     workbook.set_input(SheetId(0), at(2, 0), "'0008").unwrap();
     assert_eq!(saved(&path, workbook, &csv), b"code,qty\n00123,5\n0008,6\n");
 }
@@ -210,7 +224,7 @@ fn grid() -> impl Strategy<Value = Vec<Vec<String>>> {
 fn check_text_cells(workbook: &Workbook, rows: &[Vec<String>], text: &TextColumns) {
     for (row, fields) in rows.iter().enumerate() {
         for (column, field) in fields.iter().enumerate() {
-            if text.holds(column) && !field.is_empty() {
+            if text.holds_field(column) && !field.is_empty() {
                 assert_text(workbook, at(row as i64, column as i64), field);
             }
         }
@@ -225,7 +239,10 @@ proptest! {
         rows in grid(),
         mask in 1u8..(1 << COLUMNS),
     ) {
-        let text = TextColumns::chosen((0..COLUMNS).filter(|column| (mask >> column) & 1 == 1));
+        let columns: Vec<u16> = (0..COLUMNS as u16)
+            .filter(|column| (mask >> column) & 1 == 1)
+            .collect();
+        let text = chosen(&columns);
         let plain = vec!["word".to_string(); COLUMNS];
         let rows: Vec<Vec<String>> = rows
             .into_iter()
@@ -235,7 +252,7 @@ proptest! {
                     .zip(&plain)
                     .enumerate()
                     .map(|(column, (field, other))| {
-                        if text.holds(column) { field } else { other.clone() }
+                        if text.holds_field(column) { field } else { other.clone() }
                     })
                     .collect()
             })
@@ -255,4 +272,74 @@ proptest! {
         check_text_cells(&workbook, &rows, &TextColumns::Everything);
         prop_assert_eq!(saved(&path, workbook, &csv), original);
     }
+}
+
+fn reopened(path: &Path, options: CsvOptions) -> Workbook {
+    csv_io::load_csv(path, Some(options)).unwrap().workbook
+}
+
+#[test]
+fn deleting_a_column_before_the_text_columns_moves_the_choice_with_them() {
+    let original = b"name,code,id\nAna,00123,9223372036854775807\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, chosen(&[1, 2]));
+    workbook
+        .delete_columns(SheetId(0), ColIdx::clamped(0), 1)
+        .unwrap();
+    let (bytes, options) = saved_as(&request(&path, &csv), workbook);
+    assert_eq!(bytes, b"code,id\n00123,9223372036854775807\n");
+    assert_eq!(options.text, chosen(&[0, 1]));
+    let workbook = reopened(&path, options);
+    assert_text(&workbook, at(1, 0), "00123");
+    assert_text(&workbook, at(1, 1), "9223372036854775807");
+}
+
+#[test]
+fn inserting_a_column_before_the_text_columns_moves_the_choice_with_them() {
+    let original = b"name,code,id\nAna,00123,9223372036854775807\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, chosen(&[1, 2]));
+    workbook
+        .insert_columns(SheetId(0), ColIdx::clamped(0), 1)
+        .unwrap();
+    let (_, options) = saved_as(&request(&path, &csv), workbook);
+    assert_eq!(options.text, chosen(&[2, 3]));
+    let workbook = reopened(&path, options);
+    assert_text(&workbook, at(1, 2), "00123");
+    assert_text(&workbook, at(1, 3), "9223372036854775807");
+}
+
+#[test]
+fn a_log_that_cannot_be_followed_gives_the_text_columns_the_cells_that_are_text() {
+    let original = b"name,qty,code\nAna,5,00123\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, workbook, csv) = opened_with(dir.path(), original, chosen(&[2]));
+    let mut asked = request(&path, &csv);
+    asked.binding.log.lose(u64::MAX);
+    asked.binding.accepted.moved_cells = true;
+    let (_, options) = saved_as(&asked, workbook);
+    assert!(options.text.holds_field(2) && !options.text.holds_field(1));
+    assert_text(&reopened(&path, options), at(1, 2), "00123");
+}
+
+#[test]
+fn moving_text_cells_keeps_them_text_whatever_they_look_like() {
+    let original = b"a,b\n=1+1,00123\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, TextColumns::Everything);
+    workbook
+        .insert_rows(SheetId(0), RowIdx::clamped(1), 1)
+        .unwrap();
+    assert_text(&workbook, at(2, 0), "=1+1");
+    assert_text(&workbook, at(2, 1), "00123");
+    assert_eq!(saved(&path, workbook, &csv), b"a,b\n,\n=1+1,00123\n");
+}
+
+#[test]
+fn a_file_opened_with_nothing_stored_has_its_ids_as_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ids.csv");
+    std::fs::write(&path, b"name,code\nAna,00123\n").unwrap();
+    let load = csv_io::load_csv(&path, None).unwrap();
+    assert_text(&load.workbook, at(1, 1), "00123");
 }
