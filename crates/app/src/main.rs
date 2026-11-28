@@ -66,6 +66,7 @@ mod recovery;
 mod refresh;
 mod region;
 mod restart;
+mod scroll_thumb;
 mod session;
 mod settings_window;
 mod sheet_tabs;
