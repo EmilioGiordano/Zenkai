@@ -72,28 +72,46 @@ impl Workspace {
         self.notify(Severity::Info, message, cx);
     }
 
-    // Hiding the bar while text typed in it is open enters that text first, as Save does.
+    // The notice comes from the result of writing the setting, so it never claims a change
+    // that did not happen.
     pub(super) fn toggle_formula_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = formula_bar_shown(cx);
         if shown {
-            self.close_formula_bar(true, window, cx);
+            self.leave_formula_bar(window, cx);
         }
-        agent_settings::change(cx, move |settings| settings.general.formula_bar = !shown);
-        if !agent_settings::can_write(cx) {
-            return;
-        }
-        let message = if shown {
-            t!("notice.formula_bar_hidden")
-        } else {
-            t!("notice.formula_bar_shown")
-        };
-        self.notify(Severity::Info, message, cx);
+        let workspace = cx.entity().downgrade();
+        agent_settings::change_then(
+            cx,
+            move |settings| settings.general.formula_bar = !shown,
+            move |outcome, cx| {
+                let updated = workspace.update(cx, |this, cx| match outcome {
+                    Ok(()) if shown => {
+                        this.notify(Severity::Info, t!("notice.formula_bar_hidden"), cx)
+                    }
+                    Ok(()) => this.notify(Severity::Info, t!("notice.formula_bar_shown"), cx),
+                    Err(text) => this.notify(Severity::Warning, text, cx),
+                });
+                if let Err(error) = updated {
+                    tracing::debug!(%error, "workspace closed before the formula bar notice");
+                }
+            },
+        );
     }
 
-    // Another window or a file edit may hide the bar while text is typed in this one.
+    // Another window or a file edit may hide the bar while this window is using it.
     pub(super) fn close_hidden_formula_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !formula_bar_shown(cx) {
-            self.close_formula_bar(true, window, cx);
+            self.leave_formula_bar(window, cx);
+        }
+    }
+
+    // Text typed in the bar is entered first, as Save does, and focus never stays on the
+    // Name Box that is about to stop being drawn, unless Go To has put its input there.
+    fn leave_formula_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_formula_bar(true, window, cx);
+        if self.go_to.is_none() && self.name_box_focus.is_focused(window) {
+            let grid = self.grid.focus_handle(cx);
+            window.focus(&grid, cx);
         }
     }
 }
