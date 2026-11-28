@@ -8,7 +8,7 @@ use ironcalc::base::cf_types::{
     CfRuleInput, Cfvo, ColorScaleThreshold, TextOperator, ValueOperator,
 };
 use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{Color, Dxf, Fill};
+use ironcalc::base::types::{AutoFilter, Color, Dxf, Fill, FilterColumn, FilterCriteria};
 use ironcalc::base::{ClipboardData, Model, Recalculation, UserModel};
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -32,6 +32,10 @@ enum Op {
     InsertRow(u32, i32),
     DeleteRow(u32, i32),
     HideRow(u32, i32, bool),
+    // A filter whose header is the given row over the rest of the grid, hiding the data
+    // rows flagged; SUBTOTAL leaves filtered rows out even with 1 to 11.
+    Filter(u32, i32, Vec<bool>),
+    Unfilter(u32),
     DefineName(String),
     AddRule(u32, u8),
     Undo,
@@ -86,6 +90,8 @@ fn formula() -> impl Strategy<Value = String> {
         1 => Just("=SEQUENCE(2)".to_string()),
         1 => cell().prop_map(|a| format!("=SEQUENCE(MAX(1,MIN(3,{a})))")),
         2 => range().prop_map(|r| format!("=SUBTOTAL(109,{r})")),
+        2 => range().prop_map(|r| format!("=SUBTOTAL(9,{r})")),
+        1 => range().prop_map(|r| format!("=SUBTOTAL(103,{r})")),
         2 => Just("=SUM(total)*2".to_string()),
         1 => Just("=SUM(A1:T3)".to_string()),
         1 => Just("=SUM(Sheet2!B:B)".to_string()),
@@ -191,6 +197,9 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::InsertRow(s, r)),
         1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
         1 => (0..SHEETS, row, any::<bool>()).prop_map(|(s, r, hidden)| Op::HideRow(s, r, hidden)),
+        1 => (0..SHEETS, 1..ROWS, prop::collection::vec(any::<bool>(), ROWS as usize))
+            .prop_map(|(s, header, hides)| Op::Filter(s, header, hides)),
+        1 => (0..SHEETS).prop_map(Op::Unfilter),
         1 => range().prop_map(Op::DefineName),
         2 => (0..SHEETS, 0..10u8).prop_map(|(s, kind)| Op::AddRule(s, kind)),
         2 => Just(Op::Undo),
@@ -350,6 +359,55 @@ fn define_name(model: &mut UserModel, range: &str) -> Result<(), String> {
     }
 }
 
+fn filter(model: &mut UserModel, sheet: u32, header: i32, hides: &[bool]) -> Result<(), String> {
+    let rows: Vec<i32> = (header + 1..=ROWS)
+        .zip(hides)
+        .filter(|(_, hide)| **hide)
+        .map(|(row, _)| row)
+        .collect();
+    let hidden: Vec<(i32, bool)> = rows.iter().map(|row| (*row, true)).collect();
+    let filter = AutoFilter {
+        first_row: header,
+        first_column: 1,
+        last_row: ROWS,
+        last_column: COLUMNS,
+        columns: vec![FilterColumn {
+            column: 0,
+            criteria: FilterCriteria::Values {
+                values: vec!["1".to_string()],
+                blank: false,
+            },
+            hidden_button: false,
+            show_button: true,
+        }],
+        filtered_rows: rows,
+        sort_state: None,
+    };
+    model.begin_edit_group()?;
+    let written = model
+        .set_auto_filter(sheet, Some(filter))
+        .and_then(|()| model.set_scattered_rows_hidden(sheet, &hidden));
+    model.end_edit_group()?;
+    written
+}
+
+fn unfilter(model: &mut UserModel, sheet: u32) -> Result<(), String> {
+    let Some(filter) = model.get_auto_filter(sheet)?.cloned() else {
+        return Ok(());
+    };
+    let shown: Vec<(i32, bool)> = filter
+        .filtered_rows
+        .iter()
+        .map(|row| (*row, false))
+        .collect();
+    model.begin_edit_group()?;
+    let written = model
+        .set_auto_filter(sheet, None)
+        .and_then(|()| model.set_scattered_rows_hidden(sheet, &shown));
+    model.end_edit_group()?;
+    written
+}
+
 // Whether the engine accepted the operation; a refused one (a paste over part of an
 // array) leaves the model as it was.
 fn apply(model: &mut UserModel, op: &Op) -> bool {
@@ -379,6 +437,8 @@ fn apply(model: &mut UserModel, op: &Op) -> bool {
         Op::InsertRow(sheet, row) => model.insert_rows(*sheet, *row, 1),
         Op::DeleteRow(sheet, row) => model.delete_rows(*sheet, *row, 1),
         Op::HideRow(sheet, row, hidden) => model.set_rows_hidden(*sheet, *row, *row, *hidden),
+        Op::Filter(sheet, header, hides) => filter(model, *sheet, *header, hides),
+        Op::Unfilter(sheet) => unfilter(model, *sheet),
         Op::DefineName(range) => define_name(model, range),
         Op::AddRule(sheet, kind) => {
             let (range, rule) = rule(*kind);
