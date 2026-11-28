@@ -1,7 +1,7 @@
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme, FocusableExt, Icon, IconName};
+use gpui_kit::component::{ActiveTheme, FocusableExt, Icon, IconName, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_engine::Engine;
@@ -12,6 +12,7 @@ use super::{Severity, Workspace, activates_button};
 use crate::actions::{ApplyLineSize, CloseLineSizeDialog, FocusNextControl, FocusPreviousControl};
 use crate::autofit;
 use crate::dialog_focus;
+use crate::focus_ring::focus_ring;
 use crate::interface_scale::rem_px;
 use crate::line_size::{Lines, Outcome, Prefill, Refusal, Separator, Slot, outcome};
 use crate::line_size_apply;
@@ -210,6 +211,7 @@ impl Workspace {
                 (None, theme.muted_foreground, theme.muted_foreground)
             }
         };
+        let field_focused = dialog.input.focus_handle(cx).is_focused(window);
         let field = h_flex()
             .items_center()
             .gap_2()
@@ -219,6 +221,7 @@ impl Workspace {
             .border_1()
             .border_color(theme.muted_foreground)
             .bg(theme.popover)
+            .when(field_focused, |field| field.shadow(focus_ring(theme)))
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&dialog.input)
@@ -265,6 +268,7 @@ impl Workspace {
                 t!("button.cancel"),
                 &dialog.cancel_focus,
                 false,
+                (window, theme),
                 || Box::new(CloseLineSizeDialog),
             ))
             .child(dialog_button(
@@ -272,6 +276,7 @@ impl Workspace {
                 t!("button.ok"),
                 &dialog.ok_focus,
                 true,
+                (window, theme),
                 || Box::new(ApplyLineSize),
             ));
         let panel = v_flex()
@@ -346,6 +351,7 @@ fn dialog_button(
     label: &'static str,
     focus: &FocusHandle,
     primary: bool,
+    (window, theme): (&Window, &Theme),
     action: fn() -> Box<dyn Action>,
 ) -> Stateful<Div> {
     let button = Button::new(button_id)
@@ -358,6 +364,9 @@ fn dialog_button(
         .id(id)
         .track_focus(focus)
         .rounded_md()
+        .when(focus.is_focused(window), |wrapper| {
+            wrapper.shadow(focus_ring(theme))
+        })
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
             if activates_button(event) {
                 window.dispatch_action(action(), cx);
