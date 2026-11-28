@@ -903,3 +903,58 @@ fn test_moving_a_text_cell_keeps_it_text() {
     assert_eq!(model._get_text("A1"), "00123");
     assert_eq!(model._get_text("B1"), "=1+1");
 }
+
+#[test]
+fn test_moving_columns_and_rows_keeps_text_cells_text() {
+    let mut model = new_empty_model();
+    model._set("A1", "'00123");
+    model._set("B1", "'=1+1");
+    model._set("C1", "x");
+    model.evaluate();
+
+    // Column A goes after column B.
+    model.move_columns_action(0, 1, 1, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "=1+1");
+    assert_eq!(model._get_text("B1"), "00123");
+    assert!(!model._has_formula("A1"));
+    assert!(matches!(
+        model._get_cell("B1"),
+        crate::types::Cell::SharedString { .. }
+    ));
+
+    // Row 1 goes under row 2.
+    model._set("A2", "y");
+    model.move_rows_action(0, 1, 1, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("A2"), "=1+1");
+    assert_eq!(model._get_text("B2"), "00123");
+    assert!(!model._has_formula("A2"));
+    assert!(matches!(
+        model._get_cell("B2"),
+        crate::types::Cell::SharedString { .. }
+    ));
+}
+
+#[test]
+fn test_extending_a_text_cell_gives_text_to_type_again() {
+    let mut model = new_empty_model();
+    model._set("A1", "'00123");
+    model._set("A2", "'=1+1");
+    model._set("A3", "plain");
+    model.evaluate();
+
+    for (from, to) in [(1, 4), (2, 5), (3, 6)] {
+        let typed = model.extend_to(0, from, 1, to, 1).unwrap();
+        model.set_user_input(0, to, 1, typed).unwrap();
+    }
+    model.evaluate();
+    assert_eq!(model._get_text("A4"), "00123");
+    assert_eq!(model._get_text("A5"), "=1+1");
+    assert_eq!(model._get_text("A6"), "plain");
+    assert!(!model._has_formula("A5"));
+    assert!(matches!(
+        model._get_cell("A4"),
+        crate::types::Cell::SharedString { .. }
+    ));
+}

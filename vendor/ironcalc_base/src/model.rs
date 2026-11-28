@@ -1978,11 +1978,26 @@ impl<'a> Model<'a> {
         let cell = self.workbook.worksheet(sheet)?.cell(row, column);
         let result = match cell {
             Some(cell) => match cell.get_formula() {
-                None => cell.get_localized_text(
-                    &self.workbook.shared_strings,
-                    self.locale,
-                    self.language,
-                ),
+                None => {
+                    let text = cell.get_localized_text(
+                        &self.workbook.shared_strings,
+                        self.locale,
+                        self.language,
+                    );
+                    // The result is typed into the target, where "00123" would become a number
+                    // and "=1+1" a formula.
+                    let quoted = matches!(cell, Cell::SharedString { .. })
+                        && self
+                            .workbook
+                            .styles
+                            .get_style(cell.get_style())?
+                            .quote_prefix;
+                    if quoted {
+                        format!("'{text}")
+                    } else {
+                        text
+                    }
+                }
                 Some(i) => {
                     let (formula, _static_result) =
                         &self.parsed_formulas[sheet as usize][i as usize];
