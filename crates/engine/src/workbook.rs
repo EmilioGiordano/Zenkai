@@ -38,6 +38,8 @@ pub(crate) const LANGUAGE: &str = "en";
 const PIXELS_PER_POINT: f64 = 4.0 / 3.0;
 // IronCalc's setter takes its own pixels: the stored width times this factor.
 const COLUMN_WIDTH_FACTOR: f64 = 9.0;
+// Excel's tallest row.
+const MAX_POINTS: f64 = 409.5;
 // And its row height setter takes points times this factor.
 const ROW_HEIGHT_FACTOR: f64 = 1.5625;
 // Excel's last date, 9999-12-31.
@@ -297,8 +299,13 @@ fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
 }
 
+// A file can say anything: what is not a height is hidden, and what is too tall is the
+// tallest row.
 fn row_pixels(points: f64) -> f32 {
-    (points * PIXELS_PER_POINT).round() as f32
+    if !points.is_finite() || points <= 0.0 {
+        return 0.0;
+    }
+    (points.min(MAX_POINTS) * PIXELS_PER_POINT).round() as f32
 }
 
 // A default of zero would hide every line, which a sheet default never does.
@@ -1855,13 +1862,12 @@ impl Engine for Workbook {
         pixels: f32,
     ) -> Result<(), EngineError> {
         let row = row_i32(row);
-        // Excel's tallest row is 409.5 points.
         let height = (if pixels.is_finite() {
             f64::from(pixels)
         } else {
             0.0
         } / PIXELS_PER_POINT)
-            .clamp(0.0, 409.5)
+            .clamp(0.0, MAX_POINTS)
             * ROW_HEIGHT_FACTOR;
         self.model
             .edit_keeping_cells(|model| model.set_rows_height(sheet.0, row, row, height))
@@ -1875,7 +1881,7 @@ impl Engine for Workbook {
     }
 
     fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
-        let points = (visible_pixels(pixels)? / PIXELS_PER_POINT).clamp(0.0, 409.5);
+        let points = (visible_pixels(pixels)? / PIXELS_PER_POINT).clamp(0.0, MAX_POINTS);
         let automatic: Vec<i32> = self
             .model
             .get_model()

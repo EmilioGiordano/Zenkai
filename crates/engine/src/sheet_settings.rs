@@ -73,7 +73,10 @@ const SHEET_VIEW: &[(&str, Value)] = &[
 ];
 const SHEET_FORMAT: &[(&str, Value)] = &[
     ("baseColWidth", Value::Int(0, 255)),
-    ("defaultColWidth", Value::Real(0.0, 255.0)),
+    (
+        "defaultColWidth",
+        Value::Real(0.0, column_units::MAX_STORED_WIDTH),
+    ),
     ("defaultRowHeight", Value::Real(0.0, 409.5)),
     ("customHeight", Value::Bool),
     ("zeroHeight", Value::Bool),
@@ -265,8 +268,12 @@ impl SheetSettings {
             .flatten()
     }
 
+    // The width as stored: defaultColWidth, else what baseColWidth comes to.
     pub(crate) fn file_column_width(&self) -> Option<f64> {
-        self.format_number("defaultColWidth")
+        self.format_number("defaultColWidth").or_else(|| {
+            self.format_number("baseColWidth")
+                .map(column_units::default_stored_width)
+        })
     }
 
     fn format_number(&self, name: &str) -> Option<f64> {
@@ -1230,6 +1237,37 @@ mod tests {
             file
         );
         assert_eq!(file.file_row_height(), Some(18.0));
+    }
+
+    #[test]
+    fn the_widest_default_column_survives_a_read() {
+        let part = sheet(
+            r#"<sheetFormatPr defaultColWidth="255.7109375" defaultRowHeight="15"/><sheetData/>"#,
+        );
+        let settings = read(&part, &mut ElementBudget::workbook());
+        assert_eq!(settings.file_column_width(), Some(255.710_937_5));
+        let past =
+            sheet(r#"<sheetFormatPr defaultColWidth="255.72" defaultRowHeight="15"/><sheetData/>"#);
+        assert_eq!(
+            read(&past, &mut ElementBudget::workbook()).file_column_width(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_base_column_width_alone_sets_the_default_column() {
+        assert_eq!(
+            with_format(r#" baseColWidth="10""#).file_column_width(),
+            Some(11.425_781_25)
+        );
+        assert_eq!(
+            with_format(r#" baseColWidth="8" defaultColWidth="20.7109375""#).file_column_width(),
+            Some(20.710_937_5)
+        );
+        assert_eq!(
+            with_format(r#" defaultRowHeight="15""#).file_column_width(),
+            None
+        );
     }
 
     #[test]

@@ -194,3 +194,15 @@ fn rows_with_a_stored_automatic_height_take_the_new_default_and_give_it_back() {
     assert!(book.sizes(SHEET).rows.is_empty());
     assert_eq!(book.sizes(SHEET).default_row_height, None);
 }
+
+#[test]
+fn the_widest_default_column_is_saved_and_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = Workbook::new_empty().unwrap();
+    book.set_default_column_width(SHEET, 1790.0).unwrap();
+    let path = dir.path().join("widest.xlsx");
+    let xml = saved(&book, &path);
+    assert!(xml.contains(r#" defaultColWidth="255.7109375""#), "{xml}");
+    let reopened = open_xlsx(&path).unwrap().workbook;
+    assert_eq!(reopened.sizes(SHEET).default_column_width, Some(1790.0));
+}
