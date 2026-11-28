@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Spreadsheet
+
+- Select Visible Cells Only (Alt+;) keeps hidden rows and columns out of the next copy, so
+  copying `A1:A10` with rows 3 to 5 hidden pastes 7 rows
+  ([#339](https://github.com/EmilioGiordano/Zenkai/issues/339)).
+
 ## [0.1.2]
 
 ### Spreadsheet
