@@ -169,6 +169,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
   (`src/user_model/common.rs`, `src/user_model/undo_redo.rs`). Needs the incremental
   recalculation: it records the row's cells as edited.
+- Hiding or showing a sheet leaves nothing to recalculate: a sheet's visibility changes no
+  value, so `Diff::SetSheetState` no longer makes the next evaluation a full one
+  (`src/user_model/recalculation.rs`). Needs the incremental recalculation. Test:
+  `hiding_and_showing_a_sheet_change_no_value` in `src/test/test_recalculation_fallbacks.rs`.
 - Text criteria as in Excel: `<=` and `>=` compared the wrong way round, and `<>text`
   skipped non-text cells (`src/functions/util.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.

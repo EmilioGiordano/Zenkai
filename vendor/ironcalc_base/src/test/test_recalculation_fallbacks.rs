@@ -91,7 +91,20 @@ fn sheets() {
         .rename_sheet(1, "Data")
         .unwrap()));
     assert!(recalculates_everything(|m| m.move_sheet(1, 0).unwrap()));
-    assert!(recalculates_everything(|m| m.hide_sheet(1).unwrap()));
+}
+
+#[test]
+fn hiding_and_showing_a_sheet_change_no_value() {
+    assert!(!recalculates_everything(|m| m.hide_sheet(1).unwrap()));
+    assert!(!recalculates_everything(|m| {
+        m.hide_sheet(1).unwrap();
+        m.unhide_sheet(1).unwrap();
+    }));
+    assert!(!recalculates_everything(|m| {
+        m.hide_sheet(1).unwrap();
+        m.undo().unwrap();
+        m.redo().unwrap();
+    }));
 }
 
 #[test]

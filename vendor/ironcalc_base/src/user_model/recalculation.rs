@@ -107,6 +107,7 @@ impl PendingRecalculation {
                 | Diff::SetFrozenRowsCount { .. }
                 | Diff::SetFrozenColumnsCount { .. }
                 | Diff::SetSheetColor { .. }
+                | Diff::SetSheetState { .. }
                 | Diff::SetShowGridLines { .. }
                 | Diff::SetTheme { .. }
                 | Diff::SetWorkbookName { .. }
@@ -125,7 +126,6 @@ impl PendingRecalculation {
                 | Diff::DeleteSheet { .. }
                 | Diff::RenameSheet { .. }
                 | Diff::MoveSheet { .. }
-                | Diff::SetSheetState { .. }
                 | Diff::CreateDefinedName { .. }
                 | Diff::DeleteDefinedName { .. }
                 | Diff::UpdateDefinedName { .. }
