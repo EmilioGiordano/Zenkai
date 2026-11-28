@@ -1,5 +1,5 @@
 use zenkai_engine::{Copied, Engine, EngineError, Workbook};
-use zenkai_types::{CellPos, MAX_COLS, MAX_ROWS, Range, SheetId};
+use zenkai_types::{CellPos, MAX_COLS, MAX_ROWS, Range, SheetId, WorkbookId};
 
 use crate::clipboard;
 use crate::visible_cells::CopyShape;
@@ -25,6 +25,18 @@ pub struct InternalClip {
     pub range: Range,
     pub sheet: SheetId,
     pub shape: CopyShape,
+}
+
+// What a background copy was started against; its result lands only if all of it still holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyStamp {
+    pub request: u64,
+    pub document: WorkbookId,
+    pub generation: u64,
+}
+
+pub fn copy_still_current(started: CopyStamp, now: Option<CopyStamp>) -> bool {
+    now == Some(started)
 }
 
 pub enum CopyOutcome {
@@ -169,6 +181,39 @@ mod tests {
             CopyOutcome::Copied(clip) => clip,
             _ => panic!("the copy was refused"),
         }
+    }
+
+    fn stamp() -> CopyStamp {
+        CopyStamp {
+            request: 4,
+            document: WorkbookId(1),
+            generation: 7,
+        }
+    }
+
+    #[test]
+    fn a_background_copy_lands_when_nothing_changed() {
+        assert!(copy_still_current(stamp(), Some(stamp())));
+    }
+
+    #[test]
+    fn a_background_copy_is_dropped_after_an_edit_a_newer_copy_or_a_switch() {
+        let newer_request = CopyStamp {
+            request: 5,
+            ..stamp()
+        };
+        assert!(!copy_still_current(stamp(), Some(newer_request)));
+        let other_document = CopyStamp {
+            document: WorkbookId(2),
+            ..stamp()
+        };
+        assert!(!copy_still_current(stamp(), Some(other_document)));
+        let replaced = CopyStamp {
+            generation: 8,
+            ..stamp()
+        };
+        assert!(!copy_still_current(stamp(), Some(replaced)));
+        assert!(!copy_still_current(stamp(), None));
     }
 
     #[test]

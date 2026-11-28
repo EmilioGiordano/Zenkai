@@ -75,7 +75,7 @@ use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::go_to::{self, GoToError};
 use crate::interface_scale::{self, rem_px};
-use crate::internal_clip::{CopyOutcome, InternalClip};
+use crate::internal_clip::{CopyOutcome, CopyStamp, InternalClip, copy_still_current};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
@@ -203,7 +203,7 @@ pub struct Workspace {
     escape_cancelled_open: bool,
     last_recalc: Option<Duration>,
     diagnostics: bool,
-    clipboard_source: Option<InternalClip>,
+    clipboard_source: Option<Arc<InternalClip>>,
     visible_mark: VisibleMark,
     copy_request: u64,
     chart: Option<ChartPanel>,
@@ -2641,6 +2641,8 @@ impl Workspace {
     }
 
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
+        // A copy still running in the background must not land over this newer one.
+        self.copy_request += 1;
         let range = self.selection(cx);
         let scope = self.visible_mark.copy_scope();
         let shape = CopyShape::of(range, scope, self.grid.read(cx).layout());
@@ -2673,9 +2675,10 @@ impl Workspace {
             self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
-        let (id, sheet, generation) = (document.id, document.sheet, document.generation());
-        self.copy_request += 1;
-        let request = self.copy_request;
+        let sheet = document.sheet;
+        let Some(started) = self.copy_stamp() else {
+            return;
+        };
         self.start_long_job(LongJob::Calculating, cx);
         cx.spawn(async move |this, cx| {
             let outcome = cx
@@ -2687,12 +2690,7 @@ impl Workspace {
                 .await;
             let update = this.update(cx, |this, cx| {
                 this.end_long_job(LongJob::Calculating, cx);
-                let current = this.documents.active_id() == Some(id)
-                    && this
-                        .documents
-                        .get(id)
-                        .is_some_and(|document| document.is_current(generation));
-                if current && this.copy_request == request {
+                if copy_still_current(started, this.copy_stamp()) {
                     this.finish_copy(Some(outcome), range, cx);
                 }
             });
@@ -2701,6 +2699,15 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn copy_stamp(&self) -> Option<CopyStamp> {
+        let document = self.documents.active()?;
+        Some(CopyStamp {
+            request: self.copy_request,
+            document: document.id,
+            generation: document.generation(),
+        })
     }
 
     fn finish_copy(
@@ -2729,7 +2736,7 @@ impl Workspace {
             }
             Some(Ok(CopyOutcome::Copied(clip))) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(clip.text.clone()));
-                self.clipboard_source = Some(clip);
+                self.clipboard_source = Some(Arc::new(clip));
                 self.grid
                     .update(cx, |grid, cx| grid.set_marquee(Some(range), cx));
             }
@@ -2819,9 +2826,12 @@ impl Workspace {
             .clipboard_source
             .as_ref()
             .filter(|clip| clip.text == text)
-            .map(|clip| (clip.sheet, clip.shape.clone()));
+            .cloned();
         let (height, width) = match &source {
-            Some((_, shape)) => (i64::from(shape.row_count()), i64::from(shape.col_count())),
+            Some(clip) => (
+                i64::from(clip.shape.row_count()),
+                i64::from(clip.shape.col_count()),
+            ),
             None => {
                 let rows = clipboard::values_only(&text);
                 (
@@ -2834,7 +2844,7 @@ impl Workspace {
         let keep = self.clipboard_source.clone().filter(|clip| !clip.cut);
         self.edit(window, cx, move |wb| {
             let rows = match source {
-                Some((from, shape)) => clipboard::cell_values(wb, from, &shape),
+                Some(clip) => clipboard::cell_values(wb, clip.sheet, &clip.shape),
                 None => clipboard::values_only(&text),
             };
             wb.set_inputs(sheet, origin, &rows)
