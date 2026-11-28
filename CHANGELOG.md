@@ -16,6 +16,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Select Visible Cells Only (Alt+;) keeps hidden rows and columns out of the next copy, so
   copying `A1:A10` with rows 3 to 5 hidden pastes 7 rows
   ([#339](https://github.com/EmilioGiordano/Zenkai/issues/339)).
+- Row Height… and Column Width… set an exact size for the selected rows or columns, in
+  Excel's units (points and characters), as one undo step; zero hides them, and a selection
+  of every row or column sets the size of the sheet. AutoFit row height and AutoFit column
+  width fit each selected line to its content, from the palette, the row and column header
+  menus (which also gain Hide and Unhide) and, for a row, a double click on the bottom
+  edge of its header
+  ([#338](https://github.com/EmilioGiordano/Zenkai/issues/338)).
+- A sheet's default row height and column width are read from the file, drawn and written
+  back, so a file that sets them keeps them.
 
 ### Safety
 
