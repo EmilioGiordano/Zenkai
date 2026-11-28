@@ -164,7 +164,8 @@ const MIN_ROW_HEIGHT: f32 = 4.0;
 // The AutoComplete list has a fixed size per row, so its height is known when it is placed.
 const SUGGESTION_WIDTH: f32 = 320.0;
 const SUGGESTION_ROW_HEIGHT: f32 = 20.0;
-const SUGGESTION_HINT_HEIGHT: f32 = 24.0;
+// Room for two lines of the hint, the most the longest one needs at this width.
+const SUGGESTION_HINT_HEIGHT: f32 = 40.0;
 const SUGGESTION_HINT_GAP: f32 = 4.0;
 // Border and vertical padding of the list.
 const SUGGESTION_FRAME_HEIGHT: f32 = 10.0;
@@ -1302,12 +1303,12 @@ impl Grid {
         let height = SUGGESTION_FRAME_HEIGHT
             + SUGGESTION_ROW_HEIGHT * suggestions.len() as f32
             + hint_height;
-        let width = SUGGESTION_WIDTH * self.zoom;
         let (view_width, view_height) = (
             f32::from(self.bounds.size.width),
             f32::from(self.bounds.size.height),
         );
-        let list_left = (left * self.zoom).min((view_width - width).max(0.0));
+        let width = SUGGESTION_WIDTH.min(view_width);
+        let list_left = (left * self.zoom).min(view_width - width);
         let below = bottom * self.zoom + 2.0;
         let cell_top = (bottom - self.layout.row_height(editor.pos.row)) * self.zoom;
         let above = cell_top - 2.0 - height;
@@ -1349,7 +1350,6 @@ impl Grid {
                         .border_color(theme.border)
                         .text_xs()
                         .text_color(theme.popover_foreground)
-                        .truncate()
                         .child(signature)
                 })),
         )
