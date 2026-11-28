@@ -30,6 +30,7 @@ mod failure;
 mod file_search;
 mod files;
 mod find;
+mod focus_ring;
 mod format_category;
 mod format_dialog;
 mod generate_dialog;
