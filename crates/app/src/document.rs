@@ -1951,4 +1951,69 @@ mod tests {
         assert_eq!(saved_text(&recovery), "mine");
         assert_eq!(std::fs::read(&target).unwrap(), before);
     }
+
+    fn three_sheets() -> Document {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook.add_sheet().unwrap();
+        workbook.add_sheet().unwrap();
+        Document::new(WorkbookId(0), SpaceId(0), 1, workbook, None, Vec::new())
+    }
+
+    fn hide(document: &mut Document, sheet: u32) {
+        document
+            .workbook_mut()
+            .unwrap()
+            .hide_sheet(SheetId(sheet))
+            .unwrap();
+        document.sync_sheets();
+    }
+
+    #[test]
+    fn hiding_the_active_sheet_activates_the_next_visible_one_and_undo_brings_it_back() {
+        let mut document = three_sheets();
+        document.sheet = SheetId(1);
+        hide(&mut document, 1);
+        assert_eq!(document.sheet, SheetId(2));
+        document.expect_undo();
+        document.workbook_mut().unwrap().undo().unwrap();
+        document.sync_sheets();
+        assert_eq!(document.sheet, SheetId(1));
+    }
+
+    #[test]
+    fn hiding_the_last_sheet_of_the_strip_activates_the_one_on_its_left() {
+        let mut document = three_sheets();
+        document.sheet = SheetId(2);
+        hide(&mut document, 2);
+        assert_eq!(document.sheet, SheetId(1));
+    }
+
+    #[test]
+    fn unhiding_activates_the_leftmost_sheet_and_undoing_goes_back_to_where_it_was() {
+        let mut document = three_sheets();
+        hide(&mut document, 1);
+        hide(&mut document, 2);
+        assert_eq!(document.sheet, SheetId(0));
+        document.note_unhide(vec![SheetId(1), SheetId(2)]);
+        document
+            .workbook_mut()
+            .unwrap()
+            .unhide_sheets(&[SheetId(1), SheetId(2)])
+            .unwrap();
+        document.sync_sheets();
+        assert_eq!(document.sheet, SheetId(1));
+        document.expect_undo();
+        document.workbook_mut().unwrap().undo().unwrap();
+        document.sync_sheets();
+        assert_eq!(document.sheet, SheetId(0));
+    }
+
+    #[test]
+    fn a_new_document_opens_on_its_first_visible_sheet() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook.add_sheet().unwrap();
+        workbook.hide_sheet(SheetId(0)).unwrap();
+        let document = Document::new(WorkbookId(0), SpaceId(0), 1, workbook, None, Vec::new());
+        assert_eq!(document.sheet, SheetId(1));
+    }
 }
