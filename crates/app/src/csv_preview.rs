@@ -1,26 +1,26 @@
+mod columns;
+mod controls;
+mod fit;
+mod render;
+mod table;
+mod words;
+
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
+
+use gpui_kit::component::VirtualListScrollHandle;
+use gpui_kit::*;
+use zenkai_formats::{
+    AtRisk, DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, TextColumns, find_at_risk, guess,
+    parse_csv,
+};
 use zenkai_i18n::t;
 
-use gpui_kit::base::{Selectable, h_flex, v_flex};
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
-use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, TextColumns, apply};
-
-use crate::actions::{CancelCsvImport, ConfirmCsvImport};
+use crate::csv_options::CsvOptions;
 use crate::entry::FileSeen;
-use crate::interface_scale::rem_px;
-
-const PREVIEW_ROWS: usize = 12;
-const PREVIEW_COLS: usize = 8;
-const DELIMITERS: [Delimiter; 4] = [
-    Delimiter::Comma,
-    Delimiter::Semicolon,
-    Delimiter::Tab,
-    Delimiter::Pipe,
-];
+pub use columns::Format;
+use columns::{Column, columns_of, detected_formats, first_selected};
 
 pub fn delimiter_label(delimiter: Delimiter) -> &'static str {
     match delimiter {
@@ -31,206 +31,390 @@ pub fn delimiter_label(delimiter: Delimiter) -> &'static str {
     }
 }
 
-pub struct CsvPreview {
+// What reading the file as a given separator tells: its rows, how its numbers and dates read,
+// and the columns the import would keep as text by itself. Scans every row, so callers run it
+// off the UI thread.
+pub struct Reading {
+    parsed: ParsedCsv,
+    guess: Guess,
+    at_risk: Vec<AtRisk>,
+}
+
+impl Reading {
+    pub fn of(parsed: ParsedCsv) -> Reading {
+        Reading {
+            guess: guess(&parsed),
+            at_risk: find_at_risk(&parsed.rows),
+            parsed,
+        }
+    }
+}
+
+// What the import needs of the preview once the user opens the file.
+pub struct Import {
     pub path: PathBuf,
     pub bytes: Arc<Vec<u8>>,
     pub parsed: ParsedCsv,
-    pub guess: Guess,
-    // The file as it was when read, for the document the import makes of it.
+    pub options: CsvOptions,
     pub seen: FileSeen,
-    // What the table shows, built once and again when the reading changes, not every frame.
-    pub shown: Vec<Vec<String>>,
+}
+
+pub enum PreviewEvent {
+    ReadFailed(String),
+}
+
+impl EventEmitter<PreviewEvent> for CsvPreview {}
+
+const SECTION_BLOCKS: usize = 5;
+const NOTE_STOPS: usize = 3;
+
+pub struct CsvPreview {
+    path: PathBuf,
+    bytes: Arc<Vec<u8>>,
+    parsed: ParsedCsv,
+    guess: Guess,
+    seen: FileSeen,
+    columns: Vec<Column>,
+    // What the user chose for each column; Keep everything as text overrides all of them.
+    formats: Vec<Format>,
+    keep_all: bool,
+    selected: usize,
+    // Answers only the latest read of the file; an older one is dropped.
+    request: u64,
+    alt_held: bool,
+    rows_shown: usize,
+    section_scrolls: bool,
+    sizes: Option<(Pixels, Rc<Vec<Size<Pixels>>>)>,
+    focus: FocusHandle,
+    strip: FocusHandle,
+    radios: FocusHandle,
+    keep_all_stop: FocusHandle,
+    note_stops: [FocusHandle; NOTE_STOPS],
+    blocks: [FocusHandle; SECTION_BLOCKS],
+    shown_block: Option<usize>,
+    columns_scroll: VirtualListScrollHandle,
+    section_scroll: ScrollHandle,
+}
+
+impl Focusable for CsvPreview {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl CsvPreview {
     pub fn new(
         path: PathBuf,
         bytes: Arc<Vec<u8>>,
-        parsed: ParsedCsv,
-        guess: Guess,
+        reading: Reading,
         seen: FileSeen,
+        cx: &mut Context<Self>,
     ) -> CsvPreview {
-        let mut preview = CsvPreview {
+        let Reading {
+            parsed,
+            guess,
+            at_risk,
+        } = reading;
+        let columns = columns_of(&parsed.rows, guess.columns, at_risk);
+        let formats = detected_formats(&columns);
+        let selected = first_selected(&columns);
+        let columns_scroll = VirtualListScrollHandle::new();
+        columns_scroll.scroll_to_item(selected, ScrollStrategy::Top);
+        CsvPreview {
             path,
             bytes,
             parsed,
             guess,
             seen,
-            shown: Vec::new(),
+            columns,
+            formats,
+            keep_all: false,
+            selected,
+            request: 0,
+            alt_held: false,
+            rows_shown: columns::SAMPLE_ROWS,
+            section_scrolls: false,
+            sizes: None,
+            focus: cx.focus_handle(),
+            strip: cx.focus_handle().tab_stop(true),
+            radios: cx.focus_handle().tab_stop(true),
+            keep_all_stop: cx.focus_handle().tab_stop(true),
+            note_stops: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            blocks: std::array::from_fn(|_| cx.focus_handle()),
+            shown_block: None,
+            columns_scroll,
+            section_scroll: ScrollHandle::new(),
+        }
+    }
+
+    fn install(&mut self, reading: Reading) {
+        let Reading {
+            parsed,
+            guess,
+            at_risk,
+        } = reading;
+        self.columns = columns_of(&parsed.rows, guess.columns, at_risk);
+        self.formats = detected_formats(&self.columns);
+        self.selected = first_selected(&self.columns);
+        self.columns_scroll
+            .scroll_to_item(self.selected, ScrollStrategy::Top);
+        self.sizes = None;
+        self.parsed = parsed;
+        self.guess = guess;
+    }
+
+    // A failed import brings the rows back; every choice is still as it was.
+    pub fn restore(&mut self, parsed: ParsedCsv) {
+        self.parsed = parsed;
+    }
+
+    pub fn take_import(&mut self) -> Import {
+        let rows = std::mem::take(&mut self.parsed.rows);
+        let parsed = ParsedCsv {
+            rows,
+            ..self.parsed.clone()
         };
-        preview.rebuild();
-        preview
+        let options = CsvOptions {
+            text: self.text_columns(),
+            ..CsvOptions::from_read(&parsed, &self.guess)
+        };
+        Import {
+            path: self.path.clone(),
+            bytes: self.bytes.clone(),
+            parsed,
+            options,
+            seen: self.seen,
+        }
     }
 
-    // The table shows the values as they will be imported.
-    pub fn rebuild(&mut self) {
-        let mut shown: Vec<Vec<String>> = self
-            .parsed
-            .rows
-            .iter()
-            .take(PREVIEW_ROWS)
-            .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
-            .collect();
-        apply(
-            self.guess.decimal_mark,
-            self.guess.date_order,
-            &TextColumns::default(),
-            &mut shown,
-        );
-        self.shown = shown;
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum PreviewEvent {
-    Delimiter(Delimiter),
-    DecimalMark(DecimalMark),
-    DateOrder(DateOrder),
-}
-
-pub fn render(
-    preview: &CsvPreview,
-    focus: &FocusHandle,
-    on_event: impl Fn(PreviewEvent, &mut Window, &mut App) + Clone + 'static,
-    cx: &App,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let name = preview
-        .path
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let total_cols = preview.guess.columns;
-    let table = v_flex()
-        .border_1()
-        .border_color(theme.border)
-        .rounded_md()
-        .overflow_hidden()
-        .children(preview.shown.iter().enumerate().map(|(index, row)| {
-            h_flex()
-                .when(index % 2 == 1, |line| line.bg(theme.table_even))
-                .children((0..total_cols.min(PREVIEW_COLS)).map(|col| {
-                    div()
-                        .w(rem_px(110.0))
-                        .px_2()
-                        .py_0p5()
-                        .text_sm()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(row.get(col).cloned().unwrap_or_default())
-                }))
-        }));
-    let choice = |label: &'static str, selected: bool, event: PreviewEvent| {
-        let on_event = on_event.clone();
-        // The check mark keeps the choice readable without colour.
-        let text = if selected {
-            format!("✓ {label}")
+    fn text_columns(&self) -> TextColumns {
+        if self.keep_all {
+            TextColumns::Everything
         } else {
-            label.to_string()
-        };
-        Button::new(label)
-            .ghost()
-            .compact()
-            .label(text)
-            .selected(selected)
-            .on_click(move |_, window, cx| on_event(event, window, cx))
-    };
-    let delimiter_buttons = DELIMITERS.map(|delimiter| {
-        choice(
-            delimiter_label(delimiter),
-            preview.parsed.delimiter == delimiter,
-            PreviewEvent::Delimiter(delimiter),
-        )
-    });
-    let decimal_buttons =
-        [(DecimalMark::Dot, "1.5"), (DecimalMark::Comma, "1,5")].map(|(mark, label)| {
-            choice(
-                label,
-                preview.guess.decimal_mark == mark,
-                PreviewEvent::DecimalMark(mark),
+            TextColumns::chosen(
+                self.formats
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, format)| **format == Format::Text)
+                    .map(|(index, _)| index),
             )
-        });
-    let date_buttons = [
-        (DateOrder::DayFirst, t!("csv.date_day_first")),
-        (DateOrder::MonthFirst, t!("csv.date_month_first")),
-    ]
-    .map(|(order, label)| {
-        choice(
-            label,
-            preview.guess.date_order == order,
-            PreviewEvent::DateOrder(order),
-        )
-    });
-    v_flex()
-        .key_context("CsvPreview")
-        .track_focus(focus)
-        // Clicks on the preview must not reach the grid underneath.
-        .occlude()
-        .w(rem_px(920.0))
-        .p_4()
-        .gap_3()
-        .bg(theme.background)
-        .border_1()
-        .border_color(theme.border)
-        .rounded_lg()
-        .shadow_lg()
-        .child(
-            div()
-                .text_lg()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(t!("csv.title", name = name)),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .text_sm()
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(t!("csv.separator")),
-                )
-                .children(delimiter_buttons)
-                .child(div().w(rem_px(12.0)))
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(t!("csv.decimal")),
-                )
-                .children(decimal_buttons)
-                .child(div().w(rem_px(12.0)))
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(t!("csv.dates")),
-                )
-                .children(date_buttons)
-                .child(div().flex_1())
-                .child(div().text_color(theme.muted_foreground).child(t!(
-                    "csv.summary",
-                    encoding = preview.parsed.encoding.label(),
-                    rows = t!("csv.rows", count = preview.parsed.rows.len()),
-                    columns = t!("csv.columns", count = total_cols)
-                ))),
-        )
-        .child(table)
-        .child(
-            h_flex()
-                .gap_2()
-                .justify_end()
-                .child(
-                    Button::new("csv-cancel")
-                        .label(t!("button.cancel"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(CancelCsvImport), cx)
-                        }),
-                )
-                .child(
-                    Button::new("csv-import")
-                        .primary()
-                        .label(t!("csv.import"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ConfirmCsvImport), cx)
-                        }),
-                ),
-        )
+        }
+    }
+
+    fn has_columns(&self) -> bool {
+        !self.columns.is_empty()
+    }
+
+    // What a column is read as, whatever the choice stored for it.
+    fn format_of(&self, index: usize) -> Format {
+        if self.keep_all {
+            Format::Text
+        } else {
+            self.formats.get(index).copied().unwrap_or(Format::General)
+        }
+    }
+
+    fn formats_are_open(&self) -> bool {
+        self.has_columns() && !self.keep_all
+    }
+
+    pub fn choose_separator(&mut self, delimiter: Delimiter, cx: &mut Context<Self>) {
+        if delimiter == self.parsed.delimiter {
+            return;
+        }
+        self.request += 1;
+        let request = self.request;
+        let bytes = self.bytes.clone();
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move { parse_csv(&bytes, Some(delimiter)).map(Reading::of) })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                if this.request != request {
+                    return;
+                }
+                match read {
+                    Ok(reading) => this.install(reading),
+                    Err(error) => cx.emit(PreviewEvent::ReadFailed(error.to_string())),
+                }
+                cx.notify();
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "the preview closed while the file was read again");
+            }
+        })
+        .detach();
+    }
+
+    pub fn choose_decimal_mark(&mut self, mark: DecimalMark, cx: &mut Context<Self>) {
+        self.guess.decimal_mark = mark;
+        cx.notify();
+    }
+
+    pub fn choose_date_order(&mut self, order: DateOrder, cx: &mut Context<Self>) {
+        self.guess.date_order = order;
+        cx.notify();
+    }
+
+    pub fn select(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(last) = self.columns.len().checked_sub(1) else {
+            return;
+        };
+        self.selected = index.min(last);
+        self.columns_scroll
+            .scroll_to_item(self.selected, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn select_offset(&mut self, offset: isize, cx: &mut Context<Self>) {
+        self.select(self.selected.saturating_add_signed(offset), cx);
+    }
+
+    fn select_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let page = self.page_size().cast_signed();
+        self.select_offset(if forward { page } else { -page }, cx);
+    }
+
+    // How many columns fit the strip from the selected one on, at least one.
+    fn page_size(&self) -> usize {
+        let viewport = f32::from(self.columns_scroll.bounds().size.width);
+        let Some((_, sizes)) = &self.sizes else {
+            return 1;
+        };
+        let mut used = 0.0;
+        let fitting = sizes
+            .iter()
+            .skip(self.selected)
+            .take_while(|size| {
+                used += f32::from(size.width);
+                used <= viewport
+            })
+            .count();
+        fitting.max(1)
+    }
+
+    pub fn set_format(&mut self, format: Format, cx: &mut Context<Self>) {
+        if !self.formats_are_open() {
+            return;
+        }
+        if let Some(chosen) = self.formats.get_mut(self.selected) {
+            *chosen = format;
+            cx.notify();
+        }
+    }
+
+    pub fn switch_format(&mut self, cx: &mut Context<Self>) {
+        if let Some(current) = self.formats.get(self.selected).copied() {
+            self.set_format(current.other(), cx);
+        }
+    }
+
+    pub fn toggle_keep_all(&mut self, cx: &mut Context<Self>) {
+        if !self.has_columns() {
+            return;
+        }
+        self.keep_all = !self.keep_all;
+        cx.notify();
+    }
+
+    // The next column the import kept as text by itself, after the selected one, from the
+    // first again when there is none further on.
+    fn select_next_flagged(&mut self, cx: &mut Context<Self>) {
+        let count = self.columns.len();
+        let next = (1..=count)
+            .map(|step| (self.selected + step) % count)
+            .find(|index| self.columns[*index].risk.is_some());
+        if let Some(next) = next {
+            self.select(next, cx);
+        }
+    }
+
+    fn focus_strip(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.strip, cx);
+    }
+
+    fn scroll_section(&mut self, down: bool, cx: &mut Context<Self>) {
+        if !self.section_scrolls {
+            return;
+        }
+        let offset = self.section_scroll.offset();
+        let furthest = -f32::from(self.section_scroll.max_offset().y);
+        let step = if down {
+            -fit::ROW_HEIGHT
+        } else {
+            fit::ROW_HEIGHT
+        };
+        let target = (f32::from(offset.y) + step).clamp(furthest, 0.0);
+        self.section_scroll.set_offset(point(offset.x, px(target)));
+        cx.notify();
+    }
+
+    // How many stops Tab visits in the dialog now, so that Shift+Tab can wrap round to the last.
+    fn tab_stops(&self) -> usize {
+        let notes = match words::note(&self.columns, &self.formats, self.keep_all) {
+            words::Note::Flagged { entries, more } => entries.len() + usize::from(more > 0),
+            words::Note::Sentence(_) => 0,
+        };
+        let separators = 4;
+        let reading_choices = if self.keep_all { 0 } else { 4 };
+        let checkbox = usize::from(self.has_columns());
+        let strip = usize::from(self.has_columns());
+        let radios = usize::from(self.formats_are_open());
+        let buttons = 2;
+        separators + reading_choices + checkbox + notes + strip + radios + buttons
+    }
+
+    // Tab wraps round inside the dialog; focus never lands on the window behind it.
+    fn cycle_focus(&self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if forward {
+            window.focus_next(cx);
+            if !self.focus.contains_focused(window, cx) {
+                window.focus(&self.focus, cx);
+                window.focus_next(cx);
+            }
+        } else {
+            window.focus_prev(cx);
+            if !self.focus.contains_focused(window, cx) {
+                window.focus(&self.focus, cx);
+                for _ in 0..self.tab_stops() {
+                    window.focus_next(cx);
+                }
+            }
+        }
+    }
+
+    // The sizes the strip lays its columns out at, kept while the interface scale is the same.
+    fn column_sizes(&mut self, rem_size: Pixels) -> Rc<Vec<Size<Pixels>>> {
+        if let Some((for_rem, sizes)) = &self.sizes
+            && *for_rem == rem_size
+        {
+            return sizes.clone();
+        }
+        let height = columns_height(self.rows_shown).to_pixels(rem_size);
+        let sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
+            self.columns
+                .iter()
+                .map(|column| {
+                    size(
+                        crate::interface_scale::rem_px(column.width).to_pixels(rem_size),
+                        height,
+                    )
+                })
+                .collect(),
+        );
+        self.sizes = Some((rem_size, sizes.clone()));
+        sizes
+    }
+
+    pub fn rows_changed(&mut self, rows: usize) {
+        if self.rows_shown != rows {
+            self.rows_shown = rows;
+            self.sizes = None;
+        }
+    }
+}
+
+fn columns_height(rows: usize) -> Rems {
+    crate::interface_scale::rem_px(table::HEADER_HEIGHT + rows as f32 * fit::ROW_HEIGHT)
 }

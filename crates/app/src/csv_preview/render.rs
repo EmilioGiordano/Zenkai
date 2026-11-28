@@ -1,0 +1,565 @@
+use gpui_kit::base::{Selectable, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use zenkai_formats::{DateOrder, DecimalMark, Delimiter};
+use zenkai_i18n::t;
+
+use super::columns::Format;
+use super::controls::{checkbox_box, focus_ring, labelled, radio_box};
+use super::words::{self, Note};
+use super::{CsvPreview, delimiter_label, fit};
+use crate::actions::*;
+use crate::interface_scale::rem_px;
+
+const DELIMITERS: [Delimiter; 4] = [
+    Delimiter::Comma,
+    Delimiter::Semicolon,
+    Delimiter::Tab,
+    Delimiter::Pipe,
+];
+const TITLE_HEIGHT: f32 = 28.0;
+const ROW_HEIGHT: f32 = 30.0;
+const NOTE_HEIGHT: f32 = 54.0;
+const PANEL_HEIGHT: f32 = 90.0;
+const FOOTER_HEIGHT: f32 = 34.0;
+const DISABLED_OPACITY: f32 = 0.55;
+
+#[derive(Clone, Copy)]
+enum Jump {
+    Column(usize),
+    NextFlagged,
+}
+
+impl Render for CsvPreview {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale = f32::from(window.rem_size()) / 16.0;
+        let fitted = fit::fit(f32::from(window.viewport_size().height), scale);
+        self.rows_changed(fitted.rows);
+        self.section_scrolls = fitted.scrolls;
+        self.follow_focus(window, cx);
+        let table = self.render_table(window, cx).into_any_element();
+        let settings = self.render_settings(cx).into_any_element();
+        let keep_all = self.render_keep_all(window, cx).into_any_element();
+        let note = self.render_note(window, cx).into_any_element();
+        let panel = self.render_panel(window, cx).into_any_element();
+        let title = self.render_title();
+        let footer = self.render_footer(cx);
+        let theme = cx.theme();
+        let section = v_flex()
+            .id("csv-section")
+            .track_scroll(&self.section_scroll)
+            .overflow_y_scroll()
+            .flex_1()
+            .min_h_0()
+            .gap_3()
+            .child(self.block(0, settings))
+            .child(self.block(1, keep_all))
+            .child(self.block(2, note))
+            .child(self.block(3, table))
+            .child(self.block(4, panel));
+        let dialog = v_flex()
+            .key_context("CsvPreview")
+            .track_focus(&self.focus)
+            .occlude()
+            .on_action(cx.listener(|this, _: &CsvColumnLeft, _, cx| this.select_offset(-1, cx)))
+            .on_action(cx.listener(|this, _: &CsvColumnRight, _, cx| this.select_offset(1, cx)))
+            .on_action(cx.listener(|this, _: &CsvColumnFirst, _, cx| this.select(0, cx)))
+            .on_action(cx.listener(|this, _: &CsvColumnLast, _, cx| {
+                this.select(this.columns.len().saturating_sub(1), cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &CsvColumnPageBack, _, cx| this.select_page(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CsvColumnPageForward, _, cx| this.select_page(true, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SwitchColumnFormat, _, cx| this.switch_format(cx)))
+            .on_action(
+                cx.listener(|this, _: &SetColumnGeneral, _, cx| {
+                    this.set_format(Format::General, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &SetColumnText, _, cx| this.set_format(Format::Text, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ToggleKeepAllAsText, _, cx| this.toggle_keep_all(cx)))
+            .on_action(
+                cx.listener(|this, _: &ScrollCsvPreviewUp, _, cx| this.scroll_section(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ScrollCsvPreviewDown, _, cx| this.scroll_section(true, cx)),
+            )
+            .on_action(cx.listener(|this, _: &FocusNextControl, window, cx| {
+                this.cycle_focus(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FocusPreviousControl, window, cx| {
+                this.cycle_focus(false, window, cx)
+            }))
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                if this.alt_held != event.modifiers.alt {
+                    this.alt_held = event.modifiers.alt;
+                    cx.notify();
+                }
+            }))
+            .w(rem_px(920.0))
+            .max_w_full()
+            .h(px(fitted.height))
+            .p_4()
+            .gap_3()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .shadow_lg()
+            .child(title)
+            .child(section)
+            .child(footer);
+        div()
+            .absolute()
+            .top(px(fitted.top))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(dialog)
+    }
+}
+
+impl CsvPreview {
+    // Scrolls the part between the title and the footer so the block that took focus is fully
+    // in view, which only matters when the window is too short for all of it.
+    fn follow_focus(&mut self, window: &Window, cx: &App) {
+        let focused = self
+            .blocks
+            .iter()
+            .position(|block| block.contains_focused(window, cx));
+        if focused != self.shown_block {
+            if let Some(block) = focused {
+                self.section_scroll.scroll_to_item(block);
+            }
+            self.shown_block = focused;
+        }
+    }
+
+    fn block(&self, index: usize, content: AnyElement) -> impl IntoElement {
+        div()
+            .track_focus(&self.blocks[index])
+            .flex_none()
+            .child(content)
+    }
+
+    fn render_title(&self) -> impl IntoElement {
+        let name = self
+            .path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        div()
+            .h(rem_px(TITLE_HEIGHT))
+            .flex_none()
+            .truncate()
+            .text_lg()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(t!("csv.title", name = name))
+    }
+
+    fn render_settings(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let reading_open = !self.keep_all;
+        let choice = |id: (&'static str, usize),
+                      label: &'static str,
+                      selected: bool,
+                      enabled: bool,
+                      on_click: Box<dyn Fn(&mut Self, &mut Context<Self>)>| {
+            // The check mark keeps the choice readable without colour.
+            let text = if selected {
+                format!("\u{2713} {label}")
+            } else {
+                label.to_string()
+            };
+            Button::new(id)
+                .ghost()
+                .compact()
+                .label(text)
+                .selected(selected)
+                .disabled(!enabled)
+                .tab_stop(enabled)
+                .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+        };
+        let group = |name: &'static str, enabled: bool, buttons: Vec<Button>| {
+            h_flex()
+                .key_context("CsvControl")
+                .gap_2()
+                .items_center()
+                .when(!enabled, |dimmed| dimmed.opacity(DISABLED_OPACITY))
+                .child(div().text_color(theme.muted_foreground).child(name))
+                .children(buttons)
+        };
+        let separators: Vec<Button> = DELIMITERS
+            .into_iter()
+            .enumerate()
+            .map(|(index, delimiter)| {
+                choice(
+                    ("csv-separator", index),
+                    delimiter_label(delimiter),
+                    self.parsed.delimiter == delimiter,
+                    true,
+                    Box::new(move |this, cx| this.choose_separator(delimiter, cx)),
+                )
+            })
+            .collect();
+        let decimals: Vec<Button> = [(DecimalMark::Dot, "1.5"), (DecimalMark::Comma, "1,5")]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (mark, label))| {
+                choice(
+                    ("csv-decimal", index),
+                    label,
+                    self.guess.decimal_mark == mark,
+                    reading_open,
+                    Box::new(move |this, cx| this.choose_decimal_mark(mark, cx)),
+                )
+            })
+            .collect();
+        let dates: Vec<Button> = [
+            (DateOrder::DayFirst, t!("csv.date_day_first")),
+            (DateOrder::MonthFirst, t!("csv.date_month_first")),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (order, label))| {
+            choice(
+                ("csv-dates", index),
+                label,
+                self.guess.date_order == order,
+                reading_open,
+                Box::new(move |this, cx| this.choose_date_order(order, cx)),
+            )
+        })
+        .collect();
+        h_flex()
+            .h(rem_px(ROW_HEIGHT))
+            .flex_none()
+            .gap_2()
+            .items_center()
+            .text_sm()
+            .child(group(t!("csv.separator"), true, separators))
+            .child(div().w(rem_px(8.0)))
+            .child(group(t!("csv.decimal"), reading_open, decimals))
+            .child(div().w(rem_px(8.0)))
+            .child(group(t!("csv.dates"), reading_open, dates))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_right()
+                    .text_color(theme.muted_foreground)
+                    .child(t!(
+                        "csv.summary",
+                        encoding = self.parsed.encoding.label(),
+                        rows = t!("csv.rows", count = self.parsed.rows.len()),
+                        columns = t!("csv.columns", count = self.columns.len())
+                    )),
+            )
+    }
+
+    fn render_keep_all(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let enabled = self.has_columns();
+        let focused = enabled && self.keep_all_stop.is_focused(window);
+        let label = t!("csv.keep_all");
+        let toggled = if self.keep_all {
+            Toggled::True
+        } else {
+            Toggled::False
+        };
+        h_flex()
+            .h(rem_px(ROW_HEIGHT))
+            .flex_none()
+            .gap_2()
+            .items_center()
+            .child(
+                h_flex()
+                    .id("csv-keep-all")
+                    .key_context("CsvControl")
+                    .role(Role::CheckBox)
+                    .aria_label(label)
+                    .aria_toggled(toggled)
+                    .relative()
+                    .flex_none()
+                    .gap_2()
+                    .items_center()
+                    .when(enabled, |stop| {
+                        stop.track_focus(&self.keep_all_stop)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_keep_all(cx)))
+                    })
+                    .when(!enabled, |stop| stop.opacity(DISABLED_OPACITY))
+                    .child(checkbox_box(self.keep_all, theme))
+                    .child(labelled(label, t!("csv.mnemonic.keep_all"), self.alt_held))
+                    .when(focused, |stop| stop.child(focus_ring(theme))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.muted_foreground)
+                    .child(words::keep_all_hint(self.keep_all)),
+            )
+    }
+
+    fn render_note(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let note = words::note(&self.columns, &self.formats, self.keep_all);
+        let intro = words::note_intro(&note);
+        let stops: Vec<(String, Jump)> = match note {
+            Note::Sentence(_) => Vec::new(),
+            Note::Flagged { entries, more } => entries
+                .into_iter()
+                .map(|entry| (entry.text, Jump::Column(entry.column)))
+                .chain((more > 0).then(|| (t!("csv.note.more", number = more), Jump::NextFlagged)))
+                .collect(),
+        };
+        let line = h_flex()
+            .h(rem_px(18.0))
+            .items_center()
+            .gap(px(14.0))
+            .children(stops.into_iter().enumerate().map(|(stop, (text, jump))| {
+                let focused = self.note_stops[stop].is_focused(window);
+                h_flex()
+                    .when(stop > 0, |wrapper| {
+                        wrapper.pl(px(14.0)).border_l_1().border_color(theme.border)
+                    })
+                    .child(
+                        div()
+                            .id(("csv-note-entry", stop))
+                            .key_context("CsvControl")
+                            .role(Role::Button)
+                            .aria_label(text.clone())
+                            .track_focus(&self.note_stops[stop])
+                            .relative()
+                            .cursor_pointer()
+                            .underline()
+                            .font_weight(FontWeight::MEDIUM)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                match jump {
+                                    Jump::Column(column) => this.select(column, cx),
+                                    Jump::NextFlagged => this.select_next_flagged(cx),
+                                }
+                                this.focus_strip(window, cx);
+                            }))
+                            .child(text)
+                            .when(focused, |entry| entry.child(focus_ring(theme))),
+                    )
+            }));
+        h_flex()
+            .id("csv-note")
+            .role(Role::Status)
+            .h(rem_px(NOTE_HEIGHT))
+            .flex_none()
+            .items_start()
+            .gap(px(10.0))
+            .px(px(12.0))
+            .py(px(8.0))
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .bg(theme.popover)
+            .overflow_hidden()
+            .child(
+                Icon::new(IconName::Info)
+                    .size_4()
+                    .flex_shrink_0()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().h(rem_px(18.0)).truncate().child(intro))
+                    .child(line),
+            )
+    }
+
+    fn render_radios(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let open = self.formats_are_open();
+        let focused = open && self.radios.is_focused(window);
+        let current = self.format_of(self.selected);
+        let row = |format: Format, label: &'static str, key: &'static str| {
+            let selected = current == format;
+            h_flex()
+                .id(match format {
+                    Format::General => "csv-format-general",
+                    Format::Text => "csv-format-text",
+                })
+                .role(Role::RadioButton)
+                .aria_label(label)
+                .aria_toggled(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+                .relative()
+                .h(rem_px(24.0))
+                .gap_2()
+                .items_center()
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_format(format, cx);
+                    if this.formats_are_open() {
+                        window.focus(&this.radios, cx);
+                    }
+                }))
+                .child(radio_box(selected, theme))
+                .child(labelled(label, key, self.alt_held))
+                .when(focused && selected, |line| line.child(focus_ring(theme)))
+        };
+        v_flex()
+            .id("csv-radios")
+            .key_context("CsvRadios")
+            .role(Role::RadioGroup)
+            .aria_label(t!("csv.format.group"))
+            .when(open, |group| group.track_focus(&self.radios))
+            .when(!open, |group| group.opacity(DISABLED_OPACITY))
+            .child(row(
+                Format::General,
+                t!("csv.format.general"),
+                t!("csv.mnemonic.general"),
+            ))
+            .child(row(
+                Format::Text,
+                t!("csv.format.text"),
+                t!("csv.mnemonic.text"),
+            ))
+    }
+
+    fn render_panel(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let words::Panel {
+            title,
+            reason,
+            warns,
+        } = words::panel(
+            self.columns.get(self.selected),
+            self.format_of(self.selected),
+            self.keep_all,
+        );
+        let radios = self.render_radios(window, cx);
+        h_flex()
+            .h(rem_px(PANEL_HEIGHT))
+            .flex_none()
+            .gap(rem_px(16.0))
+            .px(px(12.0))
+            .py(px(8.0))
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .child(
+                v_flex()
+                    .w(rem_px(200.0))
+                    .flex_none()
+                    .child(
+                        div()
+                            .h(rem_px(18.0))
+                            .text_color(theme.muted_foreground)
+                            .child(t!("csv.format.group")),
+                    )
+                    .child(radios),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .h(rem_px(36.0))
+                            .overflow_hidden()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .line_clamp(2)
+                            .child(title),
+                    )
+                    .child(
+                        h_flex()
+                            .h(rem_px(36.0))
+                            .overflow_hidden()
+                            .gap_1p5()
+                            .items_start()
+                            .text_color(if warns {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .when(warns, |line| {
+                                line.child(
+                                    div().flex_none().mt(px(2.0)).child(
+                                        Icon::new(IconName::TriangleAlert)
+                                            .size_3p5()
+                                            .text_color(theme.warning),
+                                    ),
+                                )
+                            })
+                            .child(div().flex_1().min_w_0().line_clamp(2).child(reason)),
+                    ),
+            )
+    }
+
+    fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        h_flex()
+            .h(rem_px(FOOTER_HEIGHT))
+            .flex_none()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(rem_px(12.0))
+                    .text_color(theme.muted_foreground)
+                    .child(words::footer_hint(self.keep_all, self.has_columns())),
+            )
+            .child(
+                div().key_context("CsvControl").child(
+                    Button::new("csv-cancel")
+                        .label(t!("button.cancel"))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(CancelCsvImport), cx)
+                        }),
+                ),
+            )
+            .child(
+                div().key_context("CsvControl").child(
+                    Button::new("csv-import")
+                        .primary()
+                        .label(t!("csv.import"))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ConfirmCsvImport), cx)
+                        }),
+                ),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::table::table_height;
+    use super::*;
+
+    #[test]
+    fn the_blocks_add_up_to_the_height_of_the_dialog() {
+        let blocks = TITLE_HEIGHT
+            + ROW_HEIGHT * 2.0
+            + NOTE_HEIGHT
+            + table_height(12)
+            + PANEL_HEIGHT
+            + FOOTER_HEIGHT;
+        let gaps = 12.0 * 6.0;
+        let padding_and_border = 16.0 * 2.0 + 2.0;
+        assert_eq!(blocks + gaps + padding_and_border, fit::DIALOG_HEIGHT);
+    }
+}
