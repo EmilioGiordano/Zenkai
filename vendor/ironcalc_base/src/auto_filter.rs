@@ -61,16 +61,16 @@ impl AutoFilter {
         self.filtered_rows.binary_search(&row).is_ok()
     }
 
-    /// Whether the range and its columns are inside the sheet, and the columns and
-    /// filtered rows sorted, unique and inside the range.
+    /// Whether the range, its columns and its sort are inside the sheet, and the columns
+    /// and filtered rows sorted, unique and inside the range.
     pub fn is_valid(&self) -> bool {
         let width = self.last_column - self.first_column + 1;
-        is_valid_row(self.first_row)
-            && is_valid_row(self.last_row)
-            && is_valid_column_number(self.first_column)
-            && is_valid_column_number(self.last_column)
-            && self.first_row <= self.last_row
-            && self.first_column <= self.last_column
+        is_area(
+            self.first_row,
+            self.first_column,
+            self.last_row,
+            self.last_column,
+        ) && self.sort_state.as_ref().is_none_or(SortState::is_valid)
             && self
                 .columns
                 .iter()
@@ -137,7 +137,33 @@ impl AutoFilter {
     }
 }
 
+fn is_area(first_row: i32, first_column: i32, last_row: i32, last_column: i32) -> bool {
+    is_valid_row(first_row)
+        && is_valid_row(last_row)
+        && is_valid_column_number(first_column)
+        && is_valid_column_number(last_column)
+        && first_row <= last_row
+        && first_column <= last_column
+}
+
 impl SortState {
+    /// Whether the sorted range and every condition's range are inside the sheet.
+    pub fn is_valid(&self) -> bool {
+        is_area(
+            self.first_row,
+            self.first_column,
+            self.last_row,
+            self.last_column,
+        ) && self.conditions.iter().all(|condition| {
+            is_area(
+                condition.first_row,
+                condition.first_column,
+                condition.last_row,
+                condition.last_column,
+            )
+        })
+    }
+
     // A sort that names a deleted line no longer sorts what it did, so it goes whole.
     fn with_rows_moved(&self, moved: LineMove) -> Option<SortState> {
         let (first_row, last_row) = moved.span(self.first_row, self.last_row, LAST_ROW)?;

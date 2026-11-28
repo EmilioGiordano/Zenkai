@@ -67,6 +67,29 @@ fn an_invalid_filter_is_refused() {
 }
 
 #[test]
+fn a_sort_outside_the_sheet_makes_a_filter_invalid() {
+    let mut model = UserModel::from_model(new_empty_model());
+    let mut sorted_nowhere = filter();
+    if let Some(state) = &mut sorted_nowhere.sort_state {
+        state.conditions[0].last_row = i32::MAX;
+    }
+    assert!(model.set_auto_filter(0, Some(sorted_nowhere)).is_err());
+}
+
+#[test]
+fn a_decoded_workbook_with_an_invalid_filter_is_refused_not_a_panic() {
+    let mut model = new_empty_model();
+    let mut outside = filter();
+    outside.last_row = i32::MAX;
+    model.workbook.worksheets[0].auto_filter = Some(outside);
+    let bytes = model.to_bytes();
+    assert!(UserModel::from_bytes(&bytes, "en").is_err());
+    let mut model = new_empty_model();
+    model.workbook.worksheets[0].auto_filter = Some(filter());
+    assert!(UserModel::from_bytes(&model.to_bytes(), "en").is_ok());
+}
+
+#[test]
 fn scattered_rows_are_hidden_as_one_step_and_undo_leaves_no_entry() {
     let mut model = UserModel::from_model(new_empty_model());
     model.set_rows_height(0, 5, 5, 30.0).unwrap();

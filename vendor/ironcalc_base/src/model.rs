@@ -1760,6 +1760,17 @@ impl<'a> Model<'a> {
         // Parsing every formula past this point can hang the machine on a file
         // bigger than its budget; the estimate above refuses first.
         let open_allowance = OpenAllowance::checked(&workbook, budget_bytes)?;
+        // A workbook decoded from bytes has not been through the xlsx import's checks.
+        if let Some(sheet) = workbook
+            .worksheets
+            .iter()
+            .find(|sheet| sheet.auto_filter.as_ref().is_some_and(|f| !f.is_valid()))
+        {
+            return Err(format!(
+                "Error parsing workbook: the AutoFilter of sheet '{}' lies outside it",
+                sheet.name
+            ));
+        }
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
 
