@@ -86,8 +86,9 @@ user with any of these red.
 Branches are developed in parallel, one agent and one worktree each, and validated together
 in a staging branch.
 
-1. **Design.** The rule is in `AGENTS.md` (Process). `ui-designer` draws the mockup in
-   `docs/design/<topic>/`, `ux-reviewer` reviews it, and the maintainer approves it.
+1. **Design.** The rule is in `AGENTS.md` (Process). A UI task goes `ui-designer` (mockup
+   in the worktree, spec in the PR description), `ux-reviewer` on the mockup,
+   `frontend-implementer`, then `ux-reviewer` on the built UI with the other reviewers.
 2. **Branch.** The implementer works per the code rules and validates statically per
    Validation above, without building. It commits in logical commits and never pushes.
    When the branch is ready for review, the lead pushes it and opens a draft PR with
