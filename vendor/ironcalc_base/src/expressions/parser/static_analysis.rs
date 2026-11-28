@@ -525,20 +525,29 @@ fn range_spans(node: &Node) -> Option<(Span, Span)> {
 }
 
 /// XLOOKUP returns the row of return_array at the match for a lookup_array that is a column,
-/// and the column for one that is a row, so it is a scalar when that row or column is one cell.
-/// A lookup_array whose shape is unknown here (a name, a table, a function) is taken to run
-/// along a return_array that is one column or one row. A return_array whose shape is unknown
-/// is taken as a scalar, as before XLOOKUP could spill: Excel writes a single-value XLOOKUP as
-/// a plain formula, and a dynamic one would be written as an array formula.
+/// and the column for one that is a row, or if_not_found, so it is a scalar only when both are
+/// sure to be one cell. A plain formula cell cannot hold more than one value, so any shape not
+/// known here (a name, a table, a function, a range whose ends mix `$`) is Unknown, as INDEX is.
 fn static_analysis_xlookup(args: &[Node]) -> StaticResult {
-    let Some((return_rows, return_columns)) = args.get(2).and_then(range_spans) else {
+    let Some(return_array) = args.get(2) else {
         return StaticResult::Scalar;
     };
+    if let Some(if_not_found) = args.get(3) {
+        if run_static_analysis_on_node(if_not_found) != StaticResult::Scalar {
+            return StaticResult::Unknown;
+        }
+    }
+    let Some((return_rows, return_columns)) = range_spans(return_array) else {
+        return match run_static_analysis_on_node(return_array) {
+            StaticResult::Scalar => StaticResult::Scalar,
+            _ => StaticResult::Unknown,
+        };
+    };
+    // A one-cell lookup_array returns a whole row or column of return_array.
     let is_scalar = match args.get(1).and_then(range_spans) {
         Some((Span::Many, Span::One)) => return_columns == Span::One,
         Some((Span::One, Span::Many)) => return_rows == Span::One,
-        Some((Span::One, Span::One)) => return_rows == Span::One && return_columns == Span::One,
-        _ => return_rows == Span::One || return_columns == Span::One,
+        _ => return_rows == Span::One && return_columns == Span::One,
     };
     if is_scalar {
         StaticResult::Scalar
