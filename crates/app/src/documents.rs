@@ -174,6 +174,7 @@ impl Loaded {
         document.view = link.view;
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
         document.sheet = SheetId(link.sheet.0.min(last));
+        document.keep_sheet_shown();
         document
     }
 }

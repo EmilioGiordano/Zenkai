@@ -18,6 +18,7 @@ use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
 use crate::pending_save::{AfterJob, JobEnd, PendingSave};
+use crate::sheet_tabs::{self, Cause, UnhideOrigin};
 use crate::spaces::SpaceId;
 use crate::stale_view::{StaleRequest, StaleSlot};
 
@@ -54,6 +55,10 @@ pub struct Document {
     pub dirty: bool,
     pub sheet: SheetId,
     pub sheets: Vec<SheetInfo>,
+    // What the last Unhide commands did, so undoing one goes back to the sheet it left.
+    unhidden: Vec<UnhideOrigin>,
+    // An undo is queued, so a sheet that goes away with it is told apart from a Hide.
+    undoing: bool,
     // What the document's file holds that this workbook may not, for the open notice and a
     // restored session.
     pub unsupported: Vec<Unsupported>,
@@ -151,6 +156,7 @@ impl Document {
         unsupported: Vec<Unsupported>,
     ) -> Document {
         let sheets = workbook.sheets();
+        let sheet = sheet_tabs::first_shown(&sheets);
         let csv = path
             .as_deref()
             .filter(|path| files::opens_as_itself(path))
@@ -167,8 +173,10 @@ impl Document {
             pending_save: PendingSave::None,
             path,
             dirty: false,
-            sheet: SheetId(0),
+            sheet,
             sheets,
+            unhidden: Vec::new(),
+            undoing: false,
             unsupported,
             restored: false,
             read_only: false,
@@ -542,10 +550,39 @@ impl Document {
             return;
         };
         self.sheets_stale = false;
+        let last = u32::try_from(sheets.len().saturating_sub(1)).unwrap_or(0);
+        let cause = if std::mem::take(&mut self.undoing) {
+            Cause::Undo
+        } else {
+            Cause::Command
+        };
+        self.sheet = sheet_tabs::settled_active(
+            &self.sheets,
+            &sheets,
+            SheetId(self.sheet.0.min(last)),
+            cause,
+            &self.unhidden,
+        );
         self.sheets = sheets;
-        let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
-        if self.sheet.0 > last {
-            self.sheet = SheetId(last);
+    }
+
+    pub fn expect_undo(&mut self) {
+        self.undoing = true;
+    }
+
+    pub fn note_unhide(&mut self, sheets: Vec<SheetId>) {
+        let origin = UnhideOrigin {
+            sheets,
+            active_before: self.sheet,
+        };
+        sheet_tabs::remember(&mut self.unhidden, origin);
+    }
+
+    // The sheet after an edit that named one: it may be a sheet the strip does not list.
+    pub fn keep_sheet_shown(&mut self) {
+        let shown = sheet_tabs::shown(&self.sheets);
+        if let Some(nearest) = sheet_tabs::nearest(&shown, self.sheet) {
+            self.sheet = nearest;
         }
     }
 

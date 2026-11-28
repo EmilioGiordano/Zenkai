@@ -79,6 +79,7 @@ mod spaces;
 mod stale_view;
 mod start_view;
 mod stats;
+mod tab_color_card;
 mod tab_colors;
 mod text_disk;
 mod text_document;
@@ -90,6 +91,7 @@ mod theme_palettes;
 mod toolbar;
 #[cfg(windows)]
 mod tray;
+mod unhide_dialog;
 mod updates;
 mod version;
 mod view;
