@@ -45,38 +45,37 @@ pub fn cell_values(workbook: &Workbook, sheet: SheetId, shape: &CopyShape) -> Ve
 }
 
 pub fn shown_text(workbook: &Workbook, sheet: SheetId, shape: &CopyShape) -> String {
-    let rows: Vec<Vec<String>> = shape
-        .rows()
-        .map(|row| {
-            shape
-                .cols()
-                .map(|col| workbook.cell(sheet, CellPos::new(row, col)).text)
-                .collect()
-        })
-        .collect();
-    tsv(&rows)
+    let mut text = String::new();
+    for (index, row) in shape.rows().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        }
+        let line_start = text.len();
+        for (offset, col) in shape.cols().enumerate() {
+            if offset > 0 {
+                text.push('\t');
+            }
+            push_field(
+                &mut text,
+                &workbook.cell(sheet, CellPos::new(row, col)).text,
+            );
+        }
+        if text.len() == line_start {
+            text.push_str("\"\"");
+        }
+    }
+    text
 }
 
 // Quotes like the engine's own clipboard text, so `parse_tsv` reads it back.
-pub fn tsv(rows: &[Vec<String>]) -> String {
-    let field = |text: &str| {
-        if text.contains(['\t', '\n', '\r', '"']) {
-            format!("\"{}\"", text.replace('"', "\"\""))
-        } else {
-            text.to_string()
-        }
-    };
-    rows.iter()
-        .map(|row| match row.as_slice() {
-            [only] if only.is_empty() => "\"\"".to_string(),
-            _ => row
-                .iter()
-                .map(|text| field(text))
-                .collect::<Vec<_>>()
-                .join("\t"),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn push_field(text: &mut String, field: &str) {
+    if field.contains(['\t', '\n', '\r', '"']) {
+        text.push('"');
+        text.push_str(&field.replace('"', "\"\""));
+        text.push('"');
+    } else {
+        text.push_str(field);
+    }
 }
 
 pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
@@ -163,27 +162,36 @@ mod tests {
     }
 
     #[test]
-    fn tsv_quotes_what_would_break_a_field_and_parses_back() {
-        let rows = vec![
-            vec!["a\tb".to_string(), "say \"hi\"".to_string()],
-            vec!["two\nlines".to_string(), String::new()],
-            vec![String::new()],
-            vec!["end".to_string()],
-        ];
-        let text = tsv(&rows);
+    fn a_field_with_a_tab_a_line_break_or_a_quote_is_quoted_and_parses_back() {
+        let mut text = String::new();
+        for field in ["a\tb", "two\nlines", "say \"hi\"", "plain"] {
+            push_field(&mut text, field);
+            text.push('\t');
+        }
         assert_eq!(
             text,
-            "\"a\tb\"\t\"say \"\"hi\"\"\"\n\"two\nlines\"\t\n\"\"\nend"
+            "\"a\tb\"\t\"two\nlines\"\t\"say \"\"hi\"\"\"\tplain\t"
         );
         assert_eq!(
             parse_tsv(&text),
-            vec![
-                vec!["a\tb", "say \"hi\""],
-                vec!["two\nlines", ""],
-                vec![String::new()],
-                vec!["end"]
-            ]
+            vec![vec!["a\tb", "two\nlines", "say \"hi\"", "plain", ""]]
         );
+    }
+
+    #[test]
+    fn a_blank_line_of_one_column_is_written_as_an_empty_quoted_field() {
+        let mut book = Workbook::new_empty().unwrap();
+        let rows = vec![
+            vec!["a".to_string()],
+            vec![String::new()],
+            vec!["b".to_string()],
+        ];
+        book.set_inputs(SheetId(0), CellPos::default(), &rows)
+            .unwrap();
+        let shape = CopyShape::whole(Range::parse_a1("A1:A3").unwrap());
+        let text = shown_text(&book, SheetId(0), &shape);
+        assert_eq!(text, "a\n\"\"\nb");
+        assert_eq!(parse_tsv(&text), vec![vec!["a"], vec![""], vec!["b"]]);
     }
 
     #[test]
