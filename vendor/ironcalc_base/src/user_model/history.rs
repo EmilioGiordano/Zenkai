@@ -5,7 +5,9 @@ use bitcode::{Decode, Encode};
 use crate::{
     cf_types::CfRule,
     expressions::types::Area,
-    types::{Cell, Col, Color, Row, SheetState, Style, StyleIncludes, Theme, Worksheet},
+    types::{
+        Cell, Col, Color, DefaultSizes, Row, SheetState, Style, StyleIncludes, Theme, Worksheet,
+    },
 };
 
 #[derive(Clone, Encode, Decode)]
@@ -210,6 +212,11 @@ pub(crate) enum Diff {
         sheet: u32,
         old_value: bool,
         new_value: bool,
+    },
+    SetDefaultSizes {
+        sheet: u32,
+        old_value: DefaultSizes,
+        new_value: DefaultSizes,
     },
     SetTheme {
         old_value: Box<Theme>,
@@ -456,6 +463,7 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
             | Diff::SetFrozenRowsCount { .. }
             | Diff::SetFrozenColumnsCount { .. }
             | Diff::SetShowGridLines { .. }
+            | Diff::SetDefaultSizes { .. }
             | Diff::AddConditionalFormatting { .. }
             | Diff::DeleteConditionalFormatting { .. }
             | Diff::UpdateConditionalFormatting { .. }

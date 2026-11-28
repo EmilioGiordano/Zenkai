@@ -14,8 +14,9 @@ use crate::{
     },
     model::{FmtSettings, Model},
     types::{
-        Alignment, ArrayKind, BorderItem, Cell, CellType, Col, Color, HorizontalAlignment,
-        SheetProperties, SheetState, Style, Theme, VerticalAlignment, Workbook,
+        Alignment, ArrayKind, BorderItem, Cell, CellType, Col, Color, DefaultSizes,
+        HorizontalAlignment, SheetProperties, SheetState, Style, Theme, VerticalAlignment,
+        Workbook,
     },
 };
 
@@ -2216,6 +2217,26 @@ impl<'a> UserModel<'a> {
             old_value,
         }]);
         Ok(())
+    }
+
+    /// Sets the sizes the sheet's rows and columns without an entry of their own take
+    pub fn set_default_sizes(&mut self, sheet: u32, sizes: DefaultSizes) -> Result<(), String> {
+        let old_value = self.model.workbook.worksheet(sheet)?.default_sizes;
+        if old_value == sizes {
+            return Ok(());
+        }
+        self.model.set_default_sizes(sheet, sizes)?;
+        self.push_diff_list(vec![Diff::SetDefaultSizes {
+            sheet,
+            new_value: sizes,
+            old_value,
+        }]);
+        Ok(())
+    }
+
+    /// Returns the sizes the sheet's rows and columns without an entry of their own take
+    pub fn get_default_sizes(&self, sheet: u32) -> Result<DefaultSizes, String> {
+        Ok(self.model.workbook.worksheet(sheet)?.default_sizes)
     }
 
     /// Returns true in the grid lines for

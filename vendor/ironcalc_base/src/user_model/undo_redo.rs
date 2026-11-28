@@ -385,6 +385,13 @@ impl<'a> UserModel<'a> {
                 } => {
                     self.model.set_show_grid_lines(*sheet, *old_value)?;
                 }
+                Diff::SetDefaultSizes {
+                    sheet,
+                    old_value,
+                    new_value: _,
+                } => {
+                    self.model.set_default_sizes(*sheet, *old_value)?;
+                }
                 Diff::SetTheme {
                     old_value,
                     new_value: _,
@@ -459,6 +466,7 @@ impl<'a> UserModel<'a> {
                     worksheet.rows = old_data.rows.clone();
                     worksheet.cols = old_data.cols.clone();
                     worksheet.show_grid_lines = old_data.show_grid_lines;
+                    worksheet.default_sizes = old_data.default_sizes;
                     worksheet.frozen_columns = old_data.frozen_columns;
                     worksheet.frozen_rows = old_data.frozen_rows;
                     worksheet.state = old_data.state.clone();
@@ -927,6 +935,13 @@ impl<'a> UserModel<'a> {
                     new_value,
                 } => {
                     self.model.set_show_grid_lines(*sheet, *new_value)?;
+                }
+                Diff::SetDefaultSizes {
+                    sheet,
+                    old_value: _,
+                    new_value,
+                } => {
+                    self.model.set_default_sizes(*sheet, *new_value)?;
                 }
                 Diff::SetTheme {
                     old_value: _,

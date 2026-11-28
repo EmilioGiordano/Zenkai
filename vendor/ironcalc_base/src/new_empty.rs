@@ -80,6 +80,7 @@ impl<'a> Model<'a> {
             show_grid_lines: true,
             views,
             conditional_formatting: vec![],
+            default_sizes: Default::default(),
         }
     }
 

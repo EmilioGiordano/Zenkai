@@ -108,6 +108,7 @@ impl PendingRecalculation {
                 | Diff::SetFrozenColumnsCount { .. }
                 | Diff::SetSheetColor { .. }
                 | Diff::SetShowGridLines { .. }
+                | Diff::SetDefaultSizes { .. }
                 | Diff::SetTheme { .. }
                 | Diff::SetWorkbookName { .. }
                 | Diff::CreateNamedStyle { .. }

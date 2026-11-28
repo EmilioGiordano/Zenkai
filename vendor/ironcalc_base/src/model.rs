@@ -1289,6 +1289,13 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
+    /// Sets the sizes of the rows and columns of the sheet that have no entry of their own
+    pub fn set_default_sizes(&mut self, sheet: u32, sizes: DefaultSizes) -> Result<(), String> {
+        let worksheet = self.workbook.worksheet_mut(sheet)?;
+        worksheet.default_sizes = sizes;
+        Ok(())
+    }
+
     // Returns the 'single' value of a cell. Not arrays or ranges.
     pub(crate) fn get_cell_value(
         &self,

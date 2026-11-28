@@ -1229,6 +1229,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
             show_grid_lines: sheet_view.show_grid_lines,
             views,
             conditional_formatting,
+            default_sizes: Default::default(),
         },
         sheet_view.is_selected,
     ))
