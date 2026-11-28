@@ -44,6 +44,7 @@ mod keymap;
 mod language;
 mod line_size;
 mod line_size_apply;
+mod line_size_text;
 mod logging;
 mod markdown_depth;
 mod markdown_highlight;
