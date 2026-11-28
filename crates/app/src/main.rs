@@ -70,6 +70,7 @@ mod recovery;
 mod refresh;
 mod region;
 mod restart;
+mod selection_menu;
 mod session;
 mod settings_window;
 mod sidebar_item;

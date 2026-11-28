@@ -14,9 +14,7 @@ use gpui_kit::*;
 use zenkai_agent::settings::SettingsError;
 use zenkai_engine::{Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
 use zenkai_formats::{Delimiter, apply, guess, parse_csv};
-use zenkai_grid::{
-    CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
-};
+use zenkai_grid::{CycleReference, Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_i18n::t;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, LineAxis, NumberFormat, Range, Rgb,
@@ -91,6 +89,7 @@ use crate::recent;
 use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
+use crate::selection_menu;
 use crate::session::{SaveOrder, Session};
 use crate::sidebar_item::human_size;
 use crate::space_appearance::SpaceAppearance;
@@ -4163,8 +4162,12 @@ impl Workspace {
                             .child(self.grid.clone())
                             .children(self.render_review_popover(cx))
                             .context_menu({
-                                let grid_focus = self.grid.focus_handle(cx);
-                                move |menu, _, _| cell_menu(menu, grid_focus.clone())
+                                let grid = self.grid.clone();
+                                let grid_focus = grid.focus_handle(cx);
+                                move |menu, _, cx| {
+                                    let target = grid.read(cx).menu_target();
+                                    selection_menu::build(menu, grid_focus.clone(), target)
+                                }
                             }),
                     )
                     .children(
@@ -4918,32 +4921,6 @@ fn file_label(path: &Path) -> String {
         || path.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
-}
-
-// Excel's cell context menu, trimmed to what Zenkai supports. Actions go to the grid so
-// they act on the selection the right click just set.
-fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
-    menu.action_context(grid_focus)
-        .menu(t!("menu.cut"), Box::new(Cut))
-        .menu(t!("menu.copy"), Box::new(Copy))
-        .menu(t!("menu.paste"), Box::new(Paste))
-        .menu(t!("menu.paste_values"), Box::new(PasteValues))
-        .separator()
-        .menu(t!("menu.insert_rows"), Box::new(InsertRows))
-        .menu(t!("menu.insert_columns"), Box::new(InsertColumns))
-        .menu(t!("menu.delete_rows"), Box::new(DeleteRows))
-        .menu(t!("menu.delete_columns"), Box::new(DeleteColumns))
-        .separator()
-        .menu(t!("menu.clear_contents"), Box::new(DeleteForward))
-        .menu(t!("menu.clear_formats"), Box::new(ClearFormats))
-        .menu(t!("menu.clear_all"), Box::new(ClearAll))
-        .separator()
-        .menu(t!("menu.sort_ascending"), Box::new(SortAscending))
-        .menu(t!("menu.sort_descending"), Box::new(SortDescending))
-        .separator()
-        .menu(t!("menu.generate_data"), Box::new(GenerateData))
-        .separator()
-        .menu(t!("menu.insert_chart"), Box::new(InsertChart))
 }
 
 // Excel's sheet tab menu; it acts on the active sheet.
