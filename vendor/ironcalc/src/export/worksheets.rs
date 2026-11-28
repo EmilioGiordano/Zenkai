@@ -26,7 +26,11 @@ use std::io::{self, Write};
 
 use ironcalc_base::{
     expressions::{
-        parser::{static_analysis::StaticResult, stringify::to_excel_string, Node},
+        parser::{
+            static_analysis::StaticResult,
+            stringify::{to_excel_array_string, to_excel_string},
+            Node,
+        },
         types::CellReferenceRC,
         utils::number_to_column,
     },
@@ -58,13 +62,14 @@ fn get_formula_attribute(
     row: i32,
     column: i32,
     parsed_formula: &Node,
+    to_excel: fn(&Node, &CellReferenceRC) -> String,
 ) -> String {
     let cell_ref = CellReferenceRC {
         sheet: sheet_name,
         row,
         column,
     };
-    let formula = &to_excel_string(parsed_formula, &cell_ref);
+    let formula = &to_excel(parsed_formula, &cell_ref);
     escape_xml(formula).to_string()
 }
 
@@ -418,6 +423,7 @@ fn write_cell<W: Write>(
             row_index,
             column_index,
             &parsed_formulas[*f as usize].0,
+            to_excel_string,
         )
     };
     let formula_xml = |f: &i32| -> io::Result<String> {
@@ -443,8 +449,13 @@ fn write_cell<W: Write>(
     // or None for one this writer skips.
     let array_of = |f: &i32, s: &i32, r: &(i32, i32), kind: &ArrayKind| {
         let node = parsed_formulas.get(*f as usize)?;
-        let formula =
-            get_formula_attribute(sheet_name.to_string(), row_index, column_index, &node.0);
+        let formula = get_formula_attribute(
+            sheet_name.to_string(),
+            row_index,
+            column_index,
+            &node.0,
+            to_excel_array_string,
+        );
         let style = get_cell_style_attribute(*s);
         let range = get_range_str(row_index, column_index, r.0, r.1)?;
         let cm = if matches!(kind, ArrayKind::Dynamic) {
