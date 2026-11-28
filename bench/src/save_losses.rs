@@ -102,7 +102,7 @@ const BY_ELEMENT: [(&str, &str, &[Unsupported]); 27] = [
     ("hyperlinks", "hyperlinks", &[Unsupported::Hyperlinks]),
     ("definedNames", "defined names", &[]),
     ("mergeCells", "merged cells", &[]),
-    ("autoFilter", "autofilter", &[Unsupported::AutoFilter]),
+    ("autoFilter", "autofilter", &[]),
     (
         "sheetProtection",
         "sheet protection",

@@ -200,7 +200,7 @@ mod tests {
 
     fn found() -> Vec<(String, Unsupported)> {
         [
-            ("xl/worksheets/sheet1.xml", Unsupported::AutoFilter),
+            ("xl/worksheets/sheet1.xml", Unsupported::SheetProtection),
             ("xl/pivotTables/pivotTable1.xml", Unsupported::PivotTables),
             ("xl/vbaProject.bin", Unsupported::Macros),
         ]
@@ -224,16 +224,16 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let filter = set(&[Unsupported::AutoFilter]);
+        let protection = set(&[Unsupported::SheetProtection]);
         assert!(
-            held.rewrite(0, filter, Relationships::Kept)
+            held.rewrite(0, protection, Relationships::Kept)
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
             held.rewrite(0, BTreeSet::new(), Relationships::Kept)
                 .unwrap(),
-            set(&[Unsupported::AutoFilter])
+            set(&[Unsupported::SheetProtection])
         );
         assert_eq!(
             held.rewrite(1, BTreeSet::new(), Relationships::Dropped)
@@ -255,13 +255,13 @@ mod tests {
     fn part_names_match_without_case() {
         let found = [(
             "XL/Worksheets/Sheet1.xml".to_string(),
-            Unsupported::AutoFilter,
+            Unsupported::SheetProtection,
         )];
         let mut held = Held::of(&found, &layout(vec![SheetLinks::Known(BTreeSet::new())]));
         assert_eq!(
             held.rewrite(0, BTreeSet::new(), Relationships::Kept)
                 .unwrap(),
-            set(&[Unsupported::AutoFilter])
+            set(&[Unsupported::SheetProtection])
         );
         assert_eq!(held.all(), BTreeSet::new());
     }
@@ -283,7 +283,7 @@ mod tests {
                 .unwrap(),
             set(&[
                 Unsupported::PivotTables,
-                Unsupported::AutoFilter,
+                Unsupported::SheetProtection,
                 Unsupported::Slicers
             ])
         );

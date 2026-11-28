@@ -112,7 +112,6 @@ fn unsupported_label(unsupported: Unsupported) -> &'static str {
         Unsupported::Hyperlinks => t!("unsupported.hyperlinks"),
         Unsupported::DataValidation => t!("unsupported.data_validation"),
         Unsupported::ExternalLinks => t!("unsupported.external_links"),
-        Unsupported::AutoFilter => t!("unsupported.auto_filter"),
         Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
         Unsupported::Outline => t!("unsupported.outline"),
         Unsupported::PageBreaks => t!("unsupported.page_breaks"),

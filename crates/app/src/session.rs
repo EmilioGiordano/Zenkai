@@ -178,7 +178,7 @@ impl Session {
     }
 }
 
-const ALL_UNSUPPORTED: [Unsupported; 26] = [
+const ALL_UNSUPPORTED: [Unsupported; 25] = [
     Unsupported::Charts,
     Unsupported::Images,
     Unsupported::PivotTables,
@@ -188,7 +188,6 @@ const ALL_UNSUPPORTED: [Unsupported; 26] = [
     Unsupported::Hyperlinks,
     Unsupported::DataValidation,
     Unsupported::ExternalLinks,
-    Unsupported::AutoFilter,
     Unsupported::SheetProtection,
     Unsupported::Outline,
     Unsupported::PageBreaks,
@@ -218,7 +217,6 @@ fn unsupported_code(unsupported: Unsupported) -> &'static str {
         Unsupported::Hyperlinks => "hyperlinks",
         Unsupported::DataValidation => "data-validation",
         Unsupported::ExternalLinks => "external-links",
-        Unsupported::AutoFilter => "auto-filter",
         Unsupported::SheetProtection => "sheet-protection",
         Unsupported::Outline => "outline",
         Unsupported::PageBreaks => "page-breaks",
@@ -798,6 +796,17 @@ mod tests {
         assert!(link.read_only);
         assert_eq!(link.unsupported.len(), 2);
         assert_eq!(link.recovery, None);
+    }
+
+    // Zenkai keeps AutoFilters now, but the recovery copy of an older session may have been
+    // written without the filter its file holds, so the guard still keeps that file safe.
+    #[test]
+    fn a_session_guarding_a_filter_still_loads_read_only() {
+        let mut older = record();
+        older.unsupported.push("auto-filter".to_string());
+        let link = link_of(&older, WorkbookId(0), SpaceId(0), None);
+        assert!(link.read_only);
+        assert_eq!(link.unsupported, [Unsupported::Charts, Unsupported::Macros]);
     }
 
     #[test]

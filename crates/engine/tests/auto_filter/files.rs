@@ -5,8 +5,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use zenkai_engine::{
-    Engine, ReaderComparison, SaveTarget, Unsupported, Workbook, XlsxReader, compare_readers,
-    open_xlsx_with, save_xlsx,
+    Engine, ReaderComparison, SaveTarget, Workbook, XlsxReader, compare_readers, open_xlsx_with,
+    save_xlsx,
 };
 use zenkai_types::{CellPos, ColumnCriteria};
 
@@ -95,11 +95,7 @@ fn open(dir: &Path, bytes: &[u8], reader: XlsxReader) -> Workbook {
     std::fs::write(&path, bytes).unwrap();
     let opened = open_xlsx_with(&path, reader).unwrap();
     assert!(opened.fallback.is_none(), "{:?}", opened.fallback);
-    assert!(
-        !opened.unsupported.contains(&Unsupported::AutoFilter),
-        "{:?}",
-        opened.unsupported
-    );
+    assert!(opened.unsupported.is_empty(), "{:?}", opened.unsupported);
     opened.workbook
 }
 
