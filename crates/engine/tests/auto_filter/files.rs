@@ -294,3 +294,42 @@ fn a_filter_written_by_another_program_reads_and_saves_the_same() {
     assert_eq!(reopened.auto_filter(SHEET).as_ref(), Some(&views[0]));
     assert_eq!(hidden_rows(&reopened), [3, 5]);
 }
+
+// The rule of BY_RULE with an extension in another namespace, as newer Excel versions add.
+const BY_EXTENDED_RULE: &str = concat!(
+    r#"<autoFilter ref="A1:C6"><filterColumn colId="2"><customFilters and="1">"#,
+    r#"<customFilter operator="notEqual" val="20"/><customFilter operator="notEqual" val="40"/>"#,
+    r#"</customFilters><extLst><ext uri="{0E3DA8D3-0E7B-4B5A-9F6C-6E2C1D2B4C77}" "#,
+    r#"xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">"#,
+    r#"<x14:note x14:on="1"/></ext></extLst></filterColumn></autoFilter>"#
+);
+
+fn filter_element(xml: &str) -> &str {
+    let start = xml.find("<autoFilter").unwrap();
+    let end = xml.rfind("</autoFilter>").unwrap() + "</autoFilter>".len();
+    &xml[start..end]
+}
+
+#[test]
+fn a_rule_with_an_extension_in_another_namespace_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    for reader in READERS {
+        let book = open(dir.path(), &xlsx(&excel_sheet(BY_EXTENDED_RULE)), reader);
+        let view = book.auto_filter(SHEET).unwrap();
+        assert_eq!(view.criteria, [(col('C'), ColumnCriteria::Custom)]);
+        assert_eq!(hidden_rows(&book), [3, 5, 9]);
+        let once = book.to_xlsx().unwrap();
+        let written = sheet_xml(&once);
+        assert!(
+            written.contains(
+                r#"<note xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main""#
+            ),
+            "{written}"
+        );
+        let elsewhere = tempfile::tempdir().unwrap();
+        let reopened = open(elsewhere.path(), &once, reader);
+        assert_eq!(reopened.auto_filter(SHEET), Some(view));
+        let twice = sheet_xml(&reopened.to_xlsx().unwrap());
+        assert_eq!(filter_element(&twice), filter_element(&written));
+    }
+}
