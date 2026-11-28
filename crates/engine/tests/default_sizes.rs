@@ -124,7 +124,10 @@ fn the_defaults_are_written_to_the_sheet_format_and_read_back() {
     let format = format_element(&xml);
     assert!(format.contains(r#" defaultRowHeight="22.5""#), "{format}");
     assert!(format.contains(r#" customHeight="1""#), "{format}");
-    assert!(format.contains(r#" defaultColWidth="20""#), "{format}");
+    assert!(
+        format.contains(r#" defaultColWidth="20.7109375""#),
+        "{format}"
+    );
     assert!(!xml.contains("<row "), "{xml}");
     assert!(!xml.contains("<col "), "{xml}");
     let reopened = open_xlsx(&path).unwrap().workbook;

@@ -25,6 +25,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#338](https://github.com/EmilioGiordano/Zenkai/issues/338)).
 - A sheet's default row height and column width are read from the file, drawn and written
   back, so a file that sets them keeps them.
+- Column widths follow Excel's own model: a file's `<col width>` draws at Excel's pixels (a
+  column Excel shows as 20 characters is 145 px, not 150) and a width set here is saved as
+  Excel stores it (`20.7109375`).
 
 ### Safety
 

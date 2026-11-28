@@ -13,6 +13,7 @@ use ironcalc::base::types::DefaultSizes;
 use roxmltree::Node;
 
 use crate::carried_moves::{LostKind, MoveTaken, Moves, Restored, Taken};
+use crate::column_units;
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::saved::Remains;
@@ -237,8 +238,8 @@ impl SheetSettings {
         *self == SheetSettings::default()
     }
 
-    // The width Excel gives a column with no <col>: defaultColWidth, else baseColWidth
-    // (8) plus the 3/7 character Excel adds for padding, which is its 8.43.
+    // The width, as stored, that Excel gives a column with no <col>: defaultColWidth, else
+    // what baseColWidth (8 characters unless the file says) comes to, 9.140625 for 8.
     pub fn default_column_width(&self) -> String {
         if let Some(width) = self.format_attribute("defaultColWidth") {
             return width.to_string();
@@ -247,7 +248,7 @@ impl SheetSettings {
             .format_attribute("baseColWidth")
             .and_then(|base| base.parse().ok())
             .unwrap_or(8.0);
-        format!("{:.2}", base + 3.0 / 7.0)
+        column_units::default_stored_width(base).to_string()
     }
 
     fn format_attribute(&self, name: &str) -> Option<&str> {
@@ -990,9 +991,9 @@ mod tests {
             }
             .default_column_width()
         };
-        assert_eq!(width(None), "8.43");
-        assert_eq!(width(Some(r#" baseColWidth="8""#)), "8.43");
-        assert_eq!(width(Some(r#" baseColWidth="10""#)), "10.43");
+        assert_eq!(width(None), "9.140625");
+        assert_eq!(width(Some(r#" baseColWidth="8""#)), "9.140625");
+        assert_eq!(width(Some(r#" baseColWidth="10""#)), "11.42578125");
         assert_eq!(
             width(Some(r#" baseColWidth="10" defaultColWidth="12.5""#)),
             "12.5"

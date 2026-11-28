@@ -9,6 +9,7 @@ use ironcalc::base::types::{
 use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
 
+use crate::column_units;
 use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
@@ -33,11 +34,9 @@ const STYLE_HISTORY_BYTES_PER_CELL: u64 = 1536;
 const STYLE_HISTORY_BUDGET_BYTES: u64 = 1536 * 1024 * 1024;
 const MAX_STYLED_CELLS: u64 = STYLE_HISTORY_BUDGET_BYTES / STYLE_HISTORY_BYTES_PER_CELL;
 pub(crate) const LANGUAGE: &str = "en";
-// Stored widths are in Excel characters and heights in points; these give Excel's pixels.
-const PIXELS_PER_CHAR: f64 = 7.0;
-const CHAR_WIDTH_PADDING: f64 = 5.0;
+// Stored heights are in points, which give Excel's pixels; widths are in `column_units`.
 const PIXELS_PER_POINT: f64 = 4.0 / 3.0;
-// IronCalc's setter takes its own pixels: characters times this factor.
+// IronCalc's setter takes its own pixels: the stored width times this factor.
 const COLUMN_WIDTH_FACTOR: f64 = 9.0;
 // And its row height setter takes points times this factor.
 const ROW_HEIGHT_FACTOR: f64 = 1.5625;
@@ -294,10 +293,6 @@ fn profiled(
 
 fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
-}
-
-fn column_pixels(characters: f64) -> f32 {
-    (characters * PIXELS_PER_CHAR + CHAR_WIDTH_PADDING).round() as f32
 }
 
 fn row_pixels(points: f64) -> f32 {
@@ -1797,7 +1792,7 @@ impl Engine for Workbook {
                 width: if c.hidden {
                     0.0
                 } else {
-                    column_pixels(c.width)
+                    column_units::pixels_of(c.width)
                 },
             })
             .collect();
@@ -1815,7 +1810,7 @@ impl Engine for Workbook {
             .default_sizes
             .column_width
             .or_else(|| settings.and_then(SheetSettings::file_column_width))
-            .map(column_pixels);
+            .map(column_units::pixels_of);
         let default_row_height = ws
             .default_sizes
             .row_height
@@ -1841,11 +1836,11 @@ impl Engine for Workbook {
         } else {
             0.0
         };
-        let chars = ((pixels - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).clamp(0.0, 255.0);
+        let width = column_units::stored_width(pixels);
         let column = col_i32(col);
         self.model
             .edit_keeping_cells(|model| {
-                model.set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
+                model.set_columns_width(sheet.0, column, column, width * COLUMN_WIDTH_FACTOR)
             })
             .map_err(rejected)
             .inspect(|()| self.model.count_style_edit())
@@ -1873,9 +1868,8 @@ impl Engine for Workbook {
     }
 
     fn set_default_column_width(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
-        let characters =
-            ((visible_pixels(pixels)? - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).clamp(0.0, 255.0);
-        self.change_default_sizes(sheet, |sizes| sizes.column_width = Some(characters))
+        let width = column_units::stored_width(visible_pixels(pixels)?);
+        self.change_default_sizes(sheet, |sizes| sizes.column_width = Some(width))
     }
 
     fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
