@@ -89,6 +89,7 @@ mod tray;
 mod updates;
 mod version;
 mod view;
+mod visible_cells;
 mod whats_new;
 
 use std::path::PathBuf;
