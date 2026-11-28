@@ -215,9 +215,11 @@ fn a_multi_cell_if_not_found_spills() {
     model._set("F1", "=XLOOKUP(\"z\",A1:A3,B1:B3,{1,2})");
     model._set("F2", "=XLOOKUP(\"z\",A1:A3,B1:B3,C1:D1)");
     model._set("F3", "=XLOOKUP(\"a\",A1:A3,B1:B3,{1,2})");
+    model._set("F4", "=XLOOKUP(\"z\",A1:A3,B1:B3,SWITCH(1,1,C1:D1))");
     model.evaluate();
     assert_row(&model, ["F1", "G1", "H1", "F2"], ["1", "2", "", "11"]);
     assert_row(&model, ["G2", "H2", "F3", "G3"], ["12", "", "10", ""]);
+    assert_row(&model, ["F4", "G4", "H4", "F5"], ["11", "12", "", ""]);
 }
 
 // SWITCH, IFS and IF return the range they are given, whatever their own analysis says.

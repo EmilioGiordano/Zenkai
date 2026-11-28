@@ -524,6 +524,20 @@ fn range_spans(node: &Node) -> Option<(Span, Span)> {
     }
 }
 
+// A function can return a range its own analysis calls a scalar (SWITCH, IFS), so only a
+// constant or one cell is sure to be one.
+fn is_one_cell_or_constant(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::ReferenceKind { .. }
+            | Node::BooleanKind(_)
+            | Node::NumberKind(_)
+            | Node::StringKind(_)
+            | Node::ErrorKind(_)
+            | Node::EmptyArgKind
+    )
+}
+
 /// XLOOKUP returns the row of return_array at the match for a lookup_array that is a column,
 /// and the column for one that is a row, or if_not_found, so it is a scalar only when both are
 /// sure to be one cell. A plain formula cell cannot hold more than one value, so any shape not
@@ -532,22 +546,17 @@ fn static_analysis_xlookup(args: &[Node]) -> StaticResult {
     let Some(return_array) = args.get(2) else {
         return StaticResult::Scalar;
     };
-    if let Some(if_not_found) = args.get(3) {
-        if run_static_analysis_on_node(if_not_found) != StaticResult::Scalar {
-            return StaticResult::Unknown;
-        }
+    if args
+        .get(3)
+        .is_some_and(|if_not_found| !is_one_cell_or_constant(if_not_found))
+    {
+        return StaticResult::Unknown;
     }
-    // A function can return a range its own analysis calls a scalar (SWITCH, IFS), so only a
-    // constant or one cell is sure to be one.
     let Some((return_rows, return_columns)) = range_spans(return_array) else {
-        return match return_array {
-            Node::ReferenceKind { .. }
-            | Node::BooleanKind(_)
-            | Node::NumberKind(_)
-            | Node::StringKind(_)
-            | Node::ErrorKind(_)
-            | Node::EmptyArgKind => StaticResult::Scalar,
-            _ => StaticResult::Unknown,
+        return if is_one_cell_or_constant(return_array) {
+            StaticResult::Scalar
+        } else {
+            StaticResult::Unknown
         };
     };
     // A one-cell lookup_array returns a whole row or column of return_array.
