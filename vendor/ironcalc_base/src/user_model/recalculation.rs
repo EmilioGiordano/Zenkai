@@ -93,6 +93,11 @@ impl PendingRecalculation {
                     ..
                 } => self.add_cleared(*sheet, *row, *column, old_value),
                 Diff::SetRowHidden { sheet, row, .. } => self.add_row(model, *sheet, *row),
+                Diff::SetRowEntries { sheet, changes } => {
+                    for change in changes.iter().filter(|change| change.changes_visibility()) {
+                        self.add_row(model, *sheet, change.row);
+                    }
+                }
                 Diff::CellClearFormatting { .. }
                 | Diff::SetCellStyle { .. }
                 | Diff::FillStyle { .. }
@@ -109,6 +114,7 @@ impl PendingRecalculation {
                 | Diff::SetSheetColor { .. }
                 | Diff::SetShowGridLines { .. }
                 | Diff::SetDefaultSizes { .. }
+                | Diff::SetColumnEntries { .. }
                 | Diff::SetTheme { .. }
                 | Diff::SetWorkbookName { .. }
                 | Diff::CreateNamedStyle { .. }

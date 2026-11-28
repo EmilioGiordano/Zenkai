@@ -9,7 +9,7 @@ use crate::{
 };
 
 use crate::user_model::common::selected_sheet_after_move;
-use crate::user_model::history::{Diff, DiffList};
+use crate::user_model::history::{Diff, DiffList, RowChange};
 
 impl<'a> UserModel<'a> {
     pub(super) fn apply_undo_diff_list(&mut self, diff_list: &DiffList) -> Result<(), String> {
@@ -392,6 +392,24 @@ impl<'a> UserModel<'a> {
                 } => {
                     self.model.set_default_sizes(*sheet, *old_value)?;
                 }
+                Diff::SetRowEntries { sheet, changes } => {
+                    needs_evaluation |= changes.iter().any(RowChange::changes_visibility);
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .apply_row_changes(changes, true);
+                }
+                Diff::SetColumnEntries {
+                    sheet,
+                    first,
+                    last,
+                    old,
+                    new: _,
+                } => self
+                    .model
+                    .workbook
+                    .worksheet_mut(*sheet)?
+                    .replace_cols_within(*first, *last, old),
                 Diff::SetTheme {
                     old_value,
                     new_value: _,
@@ -943,6 +961,24 @@ impl<'a> UserModel<'a> {
                 } => {
                     self.model.set_default_sizes(*sheet, *new_value)?;
                 }
+                Diff::SetRowEntries { sheet, changes } => {
+                    needs_evaluation |= changes.iter().any(RowChange::changes_visibility);
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .apply_row_changes(changes, false);
+                }
+                Diff::SetColumnEntries {
+                    sheet,
+                    first,
+                    last,
+                    old: _,
+                    new,
+                } => self
+                    .model
+                    .workbook
+                    .worksheet_mut(*sheet)?
+                    .replace_cols_within(*first, *last, new),
                 Diff::SetTheme {
                     old_value: _,
                     new_value,

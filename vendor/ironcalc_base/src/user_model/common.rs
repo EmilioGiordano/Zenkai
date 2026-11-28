@@ -21,8 +21,8 @@ use crate::{
 };
 
 use crate::user_model::history::{
-    sheets_moved, step_cells, ColumnData, Diff, DiffList, DiffType, History, QueueDiffs, RowData,
-    StepCells,
+    sheets_moved, step_cells, ColumnData, Diff, DiffList, DiffType, History, QueueDiffs, RowChange,
+    RowData, StepCells,
 };
 
 use super::border_utils::is_max_border;
@@ -2217,6 +2217,98 @@ impl<'a> UserModel<'a> {
             old_value,
         }]);
         Ok(())
+    }
+
+    /// Gives each listed row `(row, height)` its height, in the unit of
+    /// [UserModel::set_rows_height], in one pass and one diff. The per-row setters scan the
+    /// entries for every row.
+    pub fn set_row_heights(&mut self, sheet: u32, heights: &[(i32, f64)]) -> Result<(), String> {
+        if heights
+            .iter()
+            .any(|(_, height)| !height.is_finite() || *height < 0.0)
+        {
+            return Err("Can not set a negative or infinite height".to_string());
+        }
+        let changes = self
+            .model
+            .workbook
+            .worksheet(sheet)?
+            .plan_row_heights(heights);
+        self.apply_row_changes(sheet, changes)
+    }
+
+    /// Hides or shows the rows `row_start` to `row_end` in one pass and one diff. Hiding
+    /// gives every row without an entry one; showing only changes the rows that have one.
+    pub fn set_rows_hidden_in_bulk(
+        &mut self,
+        sheet: u32,
+        row_start: i32,
+        row_end: i32,
+        hidden: bool,
+    ) -> Result<(), String> {
+        let changes = self
+            .model
+            .workbook
+            .worksheet(sheet)?
+            .plan_rows_hidden(row_start, row_end, hidden);
+        self.apply_row_changes(sheet, changes)
+    }
+
+    fn apply_row_changes(&mut self, sheet: u32, changes: Vec<RowChange>) -> Result<(), String> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let visibility = changes.iter().any(RowChange::changes_visibility);
+        self.model
+            .workbook
+            .worksheet_mut(sheet)?
+            .apply_row_changes(&changes, false);
+        self.push_diff_list(vec![Diff::SetRowEntries { sheet, changes }]);
+        if visibility {
+            self.evaluate_if_not_paused();
+        }
+        Ok(())
+    }
+
+    /// Gives each run of columns `(first, last, width)` its width, in the unit of
+    /// [UserModel::set_columns_width], in one pass and one diff. A column keeps its style and
+    /// whether it is hidden.
+    pub fn set_column_widths(
+        &mut self,
+        sheet: u32,
+        runs: &[(i32, i32, f64)],
+    ) -> Result<(), String> {
+        if runs
+            .iter()
+            .any(|(_, _, width)| !width.is_finite() || *width < 0.0)
+        {
+            return Err("Can not set a negative or infinite width".to_string());
+        }
+        let Some((first, last, old, new)) = self
+            .model
+            .workbook
+            .worksheet(sheet)?
+            .plan_column_widths(runs)
+        else {
+            return Ok(());
+        };
+        self.model
+            .workbook
+            .worksheet_mut(sheet)?
+            .replace_cols_within(first, last, &new);
+        self.push_diff_list(vec![Diff::SetColumnEntries {
+            sheet,
+            first,
+            last,
+            old,
+            new,
+        }]);
+        Ok(())
+    }
+
+    /// Whether an edit group is open, so the edits that follow join one undo step already.
+    pub fn is_edit_group_open(&self) -> bool {
+        self.edit_group.is_some()
     }
 
     /// Sets the sizes the sheet's rows and columns without an entry of their own take

@@ -36,6 +36,7 @@ pub mod colors;
 pub mod expressions;
 pub mod formatter;
 pub mod language;
+mod line_entries;
 pub mod locale;
 pub mod new_empty;
 pub mod number_format;
