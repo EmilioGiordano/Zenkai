@@ -42,6 +42,28 @@ impl CopyShape {
         }
     }
 
+    // What of the shape lies inside the used area; the lines past it hold nothing to copy.
+    pub fn within(&self, end: CellPos) -> CopyShape {
+        CopyShape {
+            rows: self
+                .rows
+                .iter()
+                .filter(|(first, _)| *first <= end.row)
+                .map(|(first, last)| (*first, (*last).min(end.row)))
+                .collect(),
+            cols: self
+                .cols
+                .iter()
+                .filter(|(first, _)| *first <= end.col)
+                .map(|(first, last)| (*first, (*last).min(end.col)))
+                .collect(),
+        }
+    }
+
+    pub fn cell_count(&self) -> u64 {
+        u64::from(self.row_count()) * u64::from(self.col_count())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() || self.cols.is_empty()
     }
@@ -236,6 +258,27 @@ mod tests {
         assert_eq!(shape.row_count(), 10);
         assert_eq!(shape.col_count(), 3);
         assert_eq!(shape.blocks().len(), 1);
+    }
+
+    #[test]
+    fn within_cuts_runs_at_the_end_of_the_used_area() {
+        let layout = layout_hiding(&[2], &[]);
+        let shape = CopyShape::of(range("A1:C10"), CopyScope::VisibleOnly, &layout);
+        let used = shape.within(CellPos::parse_a1("B5").unwrap());
+        assert_eq!(row_numbers(&used), vec![1, 2, 4, 5]);
+        assert_eq!(col_numbers(&used), vec![1, 2]);
+        assert_eq!(used.cell_count(), 8);
+        assert_eq!(
+            shape.within(CellPos::parse_a1("A1").unwrap()).cell_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn within_is_empty_when_the_shape_starts_past_the_used_area() {
+        let shape = CopyShape::whole(range("D4:E6"));
+        assert!(shape.within(CellPos::parse_a1("C9").unwrap()).is_empty());
+        assert!(shape.within(CellPos::parse_a1("E3").unwrap()).is_empty());
     }
 
     #[test]

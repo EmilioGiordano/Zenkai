@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use zenkai_agent::settings::SettingsError;
-use zenkai_engine::{Copied, Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
+use zenkai_engine::{Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
 use zenkai_formats::{Delimiter, apply, guess, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
@@ -75,6 +75,7 @@ use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::go_to::{self, GoToError};
 use crate::interface_scale::{self, rem_px};
+use crate::internal_clip::{CopyOutcome, InternalClip};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
@@ -96,6 +97,7 @@ use crate::start_view;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
+use crate::visible_cells::{CopyScope, CopyShape, VisibleMark};
 use zenkai_agent::status_summary::{StatusSummary, SummaryItem};
 
 mod budget;
@@ -134,14 +136,6 @@ struct FormulaBarEdit {
     generation: u64,
     original: String,
     _events: Subscription,
-}
-
-#[derive(Clone)]
-struct InternalClip {
-    copied: Copied,
-    cut: bool,
-    range: Range,
-    sheet: SheetId,
 }
 
 #[derive(Clone, Copy)]
@@ -210,6 +204,7 @@ pub struct Workspace {
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
+    visible_mark: VisibleMark,
     chart: Option<ChartPanel>,
     palette: Option<Entity<CommandState>>,
     search: Option<SearchOverlay>,
@@ -440,6 +435,7 @@ impl Workspace {
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
+            visible_mark: VisibleMark::default(),
             chart: None,
             palette: None,
             search: None,
@@ -1192,6 +1188,7 @@ impl Workspace {
     ) {
         match event {
             GridEvent::SelectionChanged => {
+                self.visible_mark.clear();
                 self.refresh_stats(cx);
                 self.follow_review(cx);
             }
@@ -2641,40 +2638,53 @@ impl Workspace {
 
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
         let range = self.selection(cx);
+        let scope = self.visible_mark.copy_scope(range);
+        let shape = CopyShape::of(range, scope, self.grid.read(cx).layout());
+        if shape.is_empty() {
+            self.notify(Severity::Info, t!("notice.no_cells_found"), cx);
+            return;
+        }
         let Some(document) = self.documents.active() else {
             return;
         };
         let sheet = document.sheet;
-        let outcome = document.workbook_mut().map(|mut workbook| {
-            let end = workbook.used_end(sheet);
-            let clipped = range.clip_to(end).unwrap_or(Range::single(range.start));
-            if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
-                return None;
-            }
-            Some(workbook.copy(sheet, clipped))
-        });
+        let outcome = document
+            .workbook_mut()
+            .map(|mut workbook| InternalClip::copy(&mut workbook, sheet, range, shape, cut));
         match outcome {
             None => self.notify(Severity::Warning, t!("notice.still_calculating"), cx),
-            Some(None) => {
+            Some(Ok(CopyOutcome::TooLarge)) => {
                 self.notify(
                     Severity::Warning,
                     t!("notice.selection_too_large_to_copy"),
                     cx,
                 );
             }
-            Some(Some(Ok(copied))) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(copied.text.clone()));
-                self.clipboard_source = Some(InternalClip {
-                    copied,
-                    cut,
-                    range,
-                    sheet,
-                });
+            Some(Ok(CopyOutcome::CutNeedsOneArea)) => {
+                self.notify(Severity::Warning, t!("notice.cut_needs_one_area"), cx);
+            }
+            Some(Ok(CopyOutcome::Copied(clip))) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(clip.text.clone()));
+                self.clipboard_source = Some(clip);
                 self.grid
                     .update(cx, |grid, cx| grid.set_marquee(Some(range), cx));
             }
-            Some(Some(Err(error))) => self.notify(Severity::Error, error.to_string(), cx),
+            Some(Err(error)) => self.notify(Severity::Error, error.to_string(), cx),
         }
+    }
+
+    fn select_visible_cells(&mut self, cx: &mut Context<Self>) {
+        let selection = self.selection(cx);
+        let shape = CopyShape::of(
+            selection,
+            CopyScope::VisibleOnly,
+            self.grid.read(cx).layout(),
+        );
+        if shape.is_empty() {
+            self.notify(Severity::Info, t!("notice.no_cells_found"), cx);
+            return;
+        }
+        self.visible_mark.set(selection);
     }
 
     fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2685,11 +2695,9 @@ impl Workspace {
             return;
         };
         let origin = self.grid.read(cx).selection().active;
-        let internal = self
-            .clipboard_source
-            .take_if(|clip| clip.copied.text == text);
+        let internal = self.clipboard_source.take_if(|clip| clip.text == text);
         let (height, width) = match &internal {
-            Some(clip) => (clip.range.rows(), clip.range.cols()),
+            Some(clip) => (clip.shape.row_count(), clip.shape.col_count()),
             None => {
                 let rows = clipboard::parse_tsv(&text);
                 let height = u32::try_from(rows.len()).unwrap_or(u32::MAX);
@@ -2705,9 +2713,7 @@ impl Workspace {
             .map(|clip| clip.range);
         if let Some(clip) = internal {
             let keep = (!clip.cut).then(|| clip.clone());
-            self.edit(window, cx, move |wb| {
-                wb.paste(sheet, origin, &clip.copied, clip.cut)
-            });
+            self.edit(window, cx, move |wb| clip.paste(wb, sheet, origin));
             // Pasting a copy keeps copy mode, so the same cells can be pasted again.
             self.clipboard_source = keep;
         }
@@ -2740,10 +2746,10 @@ impl Workspace {
         let source = self
             .clipboard_source
             .as_ref()
-            .filter(|clip| clip.copied.text == text)
-            .map(|clip| (clip.sheet, clip.range));
-        let (height, width) = match source {
-            Some((_, range)) => (i64::from(range.rows()), i64::from(range.cols())),
+            .filter(|clip| clip.text == text)
+            .map(|clip| (clip.sheet, clip.shape.clone()));
+        let (height, width) = match &source {
+            Some((_, shape)) => (i64::from(shape.row_count()), i64::from(shape.col_count())),
             None => {
                 let rows = clipboard::values_only(&text);
                 (
@@ -2756,7 +2762,7 @@ impl Workspace {
         let keep = self.clipboard_source.clone().filter(|clip| !clip.cut);
         self.edit(window, cx, move |wb| {
             let rows = match source {
-                Some((from, range)) => clipboard::cell_values(wb, from, range),
+                Some((from, shape)) => clipboard::cell_values(wb, from, &shape),
                 None => clipboard::values_only(&text),
             };
             wb.set_inputs(sheet, origin, &rows)
@@ -4237,6 +4243,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &SelectCurrentRegion, _, cx| {
                 this.select_current_region(cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectVisibleCells, _, cx| {
+                this.select_visible_cells(cx);
             }))
             .on_action(
                 cx.listener(|this, _: &FreezeTopRow, window, cx| this.freeze(1, 0, window, cx)),
