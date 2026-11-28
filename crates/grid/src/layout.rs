@@ -206,6 +206,14 @@ impl Default for Layout {
 impl Layout {
     pub fn from_sizes(sizes: &SheetSizes) -> Layout {
         let mut layout = Layout::default();
+        // A file can carry a default that is negative or not a number.
+        let usable = |size: &f32| size.is_finite() && *size > 0.0;
+        if let Some(width) = sizes.default_column_width.filter(usable) {
+            layout.columns.default = width;
+        }
+        if let Some(height) = sizes.default_row_height.filter(usable) {
+            layout.rows.default = height;
+        }
         for span in &sizes.columns {
             for col in span.first.get()..=span.last.get() {
                 layout.columns.set(u32::from(col), span.width);
@@ -347,6 +355,43 @@ mod tests {
         assert_eq!(layout.row_at(top, 39.0).get(), 0);
         assert_eq!(layout.row_at(top, 41.0).get(), 1);
         assert_eq!(layout.shown_rows(top, 100.0).len(), 4);
+    }
+
+    #[test]
+    fn a_sheet_default_sets_every_line_without_an_entry() {
+        let sizes = SheetSizes {
+            columns: vec![ColumnSpan {
+                first: ColIdx::new(1).unwrap(),
+                last: ColIdx::new(1).unwrap(),
+                width: 100.0,
+            }],
+            rows: vec![(RowIdx::new(1).unwrap(), 0.0)],
+            default_column_width: Some(145.0),
+            default_row_height: Some(30.0),
+        };
+        let layout = Layout::from_sizes(&sizes);
+        assert_eq!(layout.col_width(ColIdx::new(0).unwrap()), 145.0);
+        assert_eq!(layout.col_width(ColIdx::new(1).unwrap()), 100.0);
+        assert_eq!(layout.row_height(RowIdx::new(0).unwrap()), 30.0);
+        assert_eq!(layout.row_height(RowIdx::new(1).unwrap()), 0.0);
+        let top = RowIdx::new(0).unwrap();
+        assert_eq!(layout.row_at(top, 31.0).get(), 2);
+    }
+
+    #[test]
+    fn a_default_that_is_not_a_size_is_ignored() {
+        for bad in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            let layout = Layout::from_sizes(&SheetSizes {
+                default_column_width: Some(bad),
+                default_row_height: Some(bad),
+                ..SheetSizes::default()
+            });
+            assert_eq!(layout.col_width(ColIdx::new(0).unwrap()), DEFAULT_COL_WIDTH);
+            assert_eq!(
+                layout.row_height(RowIdx::new(0).unwrap()),
+                DEFAULT_ROW_HEIGHT
+            );
+        }
     }
 
     fn rows_hidden(first: u32, last: u32) -> Layout {

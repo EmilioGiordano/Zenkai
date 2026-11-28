@@ -143,6 +143,16 @@ pub enum GridEvent {
         range: Range,
     },
     AutoFitRequested(ColIdx),
+    AutoFitRowRequested(RowIdx),
+}
+
+// What the last right click landed on, which tells the context menu to build.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MenuTarget {
+    #[default]
+    Cells,
+    RowHeader,
+    ColumnHeader,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +202,7 @@ pub struct Grid {
     suggestion: usize,
     used_end: CellPos,
     scroll_drag: Option<ScrollDrag>,
+    menu_target: MenuTarget,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -252,7 +263,13 @@ impl Grid {
             suggestion: 0,
             used_end: CellPos::default(),
             scroll_drag: None,
+            menu_target: MenuTarget::default(),
         }
+    }
+
+    // Set by the right click before the context menu is built, so the menu can match it.
+    pub fn menu_target(&self) -> MenuTarget {
+        self.menu_target
     }
 
     pub fn set_active_formula(&mut self, formula: SharedString) {
@@ -1018,6 +1035,9 @@ impl Grid {
                 Edge::Column(col) if event.click_count >= 2 => {
                     cx.emit(GridEvent::AutoFitRequested(col));
                 }
+                Edge::Row(row) if event.click_count >= 2 => {
+                    cx.emit(GridEvent::AutoFitRowRequested(row));
+                }
                 _ => {
                     self.edge_drag = Some(EdgeDrag {
                         edge,
@@ -1088,7 +1108,9 @@ impl Grid {
         let range = self.selection.range();
         let whole_rows = range.start.col == ColIdx::default() && range.end.col == ColIdx::LAST;
         let whole_cols = range.start.row == RowIdx::default() && range.end.row == RowIdx::LAST;
-        match self.hit(event.position) {
+        let hit = self.hit(event.position);
+        self.menu_target = menu_target_of(&hit);
+        match hit {
             Hit::Cell(pos) if !range.contains(pos) => self.select(pos, pos, cx),
             Hit::RowHeader(row)
                 if !(whole_rows && (range.start.row..=range.end.row).contains(&row)) =>
@@ -1345,6 +1367,14 @@ enum Hit {
     RowHeader(RowIdx),
     ColHeader(ColIdx),
     Cell(CellPos),
+}
+
+fn menu_target_of(hit: &Hit) -> MenuTarget {
+    match hit {
+        Hit::RowHeader(_) => MenuTarget::RowHeader,
+        Hit::ColHeader(_) => MenuTarget::ColumnHeader,
+        Hit::Corner | Hit::Cell(_) => MenuTarget::Cells,
+    }
 }
 
 pub fn step(pos: CellPos, direction: Direction, amount: i64) -> CellPos {
@@ -1878,13 +1908,24 @@ fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColI
 mod tests {
     use super::{
         Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, Selection, cached_ranges,
-        capped_frozen, cycle_within, moved_selection, next_boundary, prev_boundary, reveal_axes,
-        shown_contains, typed_preview,
+        capped_frozen, cycle_within, menu_target_of, moved_selection, next_boundary, prev_boundary,
+        reveal_axes, shown_contains, typed_preview,
     };
+    use super::{Hit, MenuTarget};
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
     fn pos(text: &str) -> CellPos {
         CellPos::parse_a1(text).unwrap()
+    }
+
+    #[test]
+    fn the_menu_follows_what_the_right_click_landed_on() {
+        let row = Hit::RowHeader(RowIdx::default());
+        let col = Hit::ColHeader(ColIdx::default());
+        assert_eq!(menu_target_of(&row), MenuTarget::RowHeader);
+        assert_eq!(menu_target_of(&col), MenuTarget::ColumnHeader);
+        assert_eq!(menu_target_of(&Hit::Corner), MenuTarget::Cells);
+        assert_eq!(menu_target_of(&Hit::Cell(pos("B2"))), MenuTarget::Cells);
     }
 
     #[test]
