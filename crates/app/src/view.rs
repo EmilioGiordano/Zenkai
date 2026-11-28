@@ -15,7 +15,7 @@ use zenkai_agent::settings::SettingsError;
 use zenkai_engine::{Copied, Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
 use zenkai_formats::{Delimiter, apply, guess, parse_csv};
 use zenkai_grid::{
-    CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
+    CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Hidden, Layout, SheetView,
 };
 use zenkai_i18n::t;
 use zenkai_types::{
@@ -32,6 +32,7 @@ mod chat_dock;
 mod close_dialog;
 mod closing;
 mod csv_files;
+mod display;
 mod messages;
 mod notice_card;
 mod notices;
@@ -567,6 +568,10 @@ impl Workspace {
                     layout: Layout::from_sizes(&wb.sizes(sheet)),
                     frozen_rows,
                     frozen_cols,
+                    hidden: Hidden {
+                        gridlines: !wb.gridlines_shown(sheet),
+                        headings: !wb.headings_shown(sheet),
+                    },
                     merges: wb.merged(sheet),
                 }
             })
@@ -721,10 +726,10 @@ impl Workspace {
         cx.notify();
     }
 
-    fn render_palette(&self) -> Option<impl IntoElement> {
+    fn render_palette(&self, cx: &App) -> Option<impl IntoElement> {
         let state = self.palette.as_ref()?;
         Some(command_overlay(
-            palette::groups(&self.recent)
+            palette::groups(&self.recent, self.palette_toggles(cx))
                 .into_iter()
                 .fold(Command::new(state), Command::group)
                 .placeholder(t!("palette.placeholder"))
@@ -2848,7 +2853,9 @@ impl Workspace {
         )
     }
 
+    // With the bar hidden this is only Go To's Name Box, in a row of its own.
     fn render_formula_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let bar_shown = display::formula_bar_shown(cx);
         let theme = cx.theme();
         let grid = self.grid.read(cx);
         let selection = grid.selection();
@@ -2895,15 +2902,17 @@ impl Workspace {
                     .child(name)
                     .into_any_element(),
             })
-            .child(
-                div()
-                    .text_sm()
-                    .italic()
-                    .text_color(theme.muted_foreground)
-                    .px_1()
-                    .child("fx"),
-            )
-            .children(self.formula_bar.as_ref().map(|bar| {
+            .when(bar_shown, |row| {
+                row.child(
+                    div()
+                        .text_sm()
+                        .italic()
+                        .text_color(theme.muted_foreground)
+                        .px_1()
+                        .child("fx"),
+                )
+            })
+            .children(self.formula_bar.as_ref().filter(|_| bar_shown).map(|bar| {
                 div()
                     .id("formula-bar-edit")
                     .key_context("FormulaBar")
@@ -2912,7 +2921,7 @@ impl Workspace {
                     .flex_1()
                     .child(Input::new(&bar.input))
             }))
-            .when(self.formula_bar.is_none(), |row| {
+            .when(bar_shown && self.formula_bar.is_none(), |row| {
                 row.child(
                     div()
                         .id("formula-content")
@@ -4065,7 +4074,10 @@ impl Workspace {
             .min_w_0()
             .h_full()
             .child(toolbar::render(&self.active_style, &self.colors, cx))
-            .child(self.render_formula_bar(cx))
+            .children(
+                (display::formula_bar_shown(cx) || self.go_to.is_some())
+                    .then(|| self.render_formula_bar(cx)),
+            )
             .children(self.render_agent_review(cx))
             .children(self.render_held_settings(cx))
             .children(self.render_find(cx))
@@ -4290,6 +4302,17 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|_, _: &ToggleSummarySum, _, cx| {
                 toggle_summary_item(SummaryItem::Sum, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleGridlines, window, cx| {
+                this.toggle_gridlines(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ToggleHeadings, window, cx| {
+                    this.toggle_headings(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ToggleFormulaBar, window, cx| {
+                this.toggle_formula_bar(window, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleFormulas, _, cx| {
                 this.show_formulas = !this.show_formulas;
@@ -4760,7 +4783,7 @@ impl Render for Workspace {
                     }))
                     .children(self.render_chat(window, cx)),
             )
-            .children(self.render_palette())
+            .children(self.render_palette(cx))
             .children(self.render_theme_picker(cx))
             .children(self.render_search(cx))
             .children(self.render_busy(busy_label, cx))

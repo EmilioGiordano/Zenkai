@@ -350,6 +350,12 @@ impl Documents {
         self.active.as_ref().map(|document| document.id)
     }
 
+    // The workbook whose sheet the grid shows: none on the start view or while a text, PDF
+    // or notes tab is on screen.
+    pub fn sheet_on_screen(&self) -> Option<&Document> {
+        self.active().filter(|_| self.tab_shown.is_none())
+    }
+
     // Whatever is on screen, a workbook or a text.
     pub fn shown_id(&self) -> Option<WorkbookId> {
         self.tab_shown.or_else(|| self.active_id())

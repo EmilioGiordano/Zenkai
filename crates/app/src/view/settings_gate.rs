@@ -12,6 +12,7 @@ use crate::settings_window::info;
 impl Workspace {
     pub(super) fn on_settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_bridge(cx);
+        self.close_hidden_formula_bar(window, cx);
         cx.notify();
         let state = cx.global::<AgentConfig>().state.clone();
         if state.held != self.shown_held {
