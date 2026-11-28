@@ -176,3 +176,46 @@ fn a_blocked_row_is_spill_error() {
         ["#SPILL!", "", "taken", ""],
     );
 }
+
+// A plain formula cannot hold several values, so every shape the parser cannot see is
+// stored as a dynamic formula and spills.
+#[test]
+fn a_return_array_of_unknown_shape_spills() {
+    let mut model = table_model(["a", "b", "c"]);
+    model
+        .new_defined_name("Data", None, "Sheet1!$B$1:$D$3")
+        .unwrap();
+    model._set("F1", "=XLOOKUP(\"b\",A1:A3,Data)");
+    model._set("F2", "=XLOOKUP(\"c\",A1:A3,OFFSET(B1,0,0,3,3))");
+    model._set("F3", "=XLOOKUP(\"a\",A1:A3,INDIRECT(\"B1:D3\"))");
+    model.evaluate();
+    assert_row(&model, ["F1", "G1", "H1", "I1"], ["20", "21", "22", ""]);
+    assert_row(&model, ["F2", "G2", "H2", "I2"], ["30", "31", "32", ""]);
+    assert_row(&model, ["F3", "G3", "H3", "I3"], ["10", "11", "12", ""]);
+}
+
+#[test]
+fn a_lookup_array_of_unknown_shape_spills() {
+    let mut model = table_model(["a", "b", "c"]);
+    model
+        .new_defined_name("Key", None, "Sheet1!$A$1:$A$1")
+        .unwrap();
+    model._set("F1", "=XLOOKUP(\"a\",A$1:A1,B1:D1)");
+    model._set("F2", "=XLOOKUP(\"a\",Key,B1:D1)");
+    model.evaluate();
+    assert_row(&model, ["F1", "G1", "H1", "I1"], ["10", "11", "12", ""]);
+    assert_row(&model, ["F2", "G2", "H2", "I2"], ["10", "11", "12", ""]);
+    assert!(model._get_cell("F1").dynamic_range().is_some());
+    assert!(model._get_cell("F2").dynamic_range().is_some());
+}
+
+#[test]
+fn a_multi_cell_if_not_found_spills() {
+    let mut model = table_model(["a", "b", "c"]);
+    model._set("F1", "=XLOOKUP(\"z\",A1:A3,B1:B3,{1,2})");
+    model._set("F2", "=XLOOKUP(\"z\",A1:A3,B1:B3,C1:D1)");
+    model._set("F3", "=XLOOKUP(\"a\",A1:A3,B1:B3,{1,2})");
+    model.evaluate();
+    assert_row(&model, ["F1", "G1", "H1", "F2"], ["1", "2", "", "11"]);
+    assert_row(&model, ["G2", "H2", "F3", "G3"], ["12", "", "10", ""]);
+}
