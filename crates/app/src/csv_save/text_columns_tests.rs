@@ -314,7 +314,7 @@ fn inserting_a_column_before_the_text_columns_moves_the_choice_with_them() {
 }
 
 #[test]
-fn a_log_that_cannot_be_followed_gives_the_text_columns_the_cells_that_are_text() {
+fn a_log_that_cannot_be_followed_gives_the_columns_a_fresh_open_would_choose() {
     let original = b"name,qty,code\nAna,5,00123\n";
     let dir = tempfile::tempdir().unwrap();
     let (path, workbook, csv) = opened_with(dir.path(), original, chosen(&[2]));
@@ -379,4 +379,37 @@ fn filling_down_text_cells_keeps_them_text() {
     asked.binding.accepted.formatting = true;
     let (bytes, _) = saved_as(&asked, workbook);
     assert_eq!(bytes, b"code\n00123\n00123\n");
+}
+
+#[test]
+fn a_typed_number_does_not_take_a_column_of_ids_out_of_text_when_the_log_is_lost() {
+    let original = b"name,code\nAna,00123\nLuis,0045\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, mut workbook, csv) = opened_with(dir.path(), original, chosen(&[1]));
+    workbook.set_input(SheetId(0), at(1, 1), "5").unwrap();
+    let mut asked = request(&path, &csv);
+    asked.binding.log.lose(u64::MAX);
+    asked.binding.accepted.moved_cells = true;
+    let (bytes, options) = saved_as(&asked, workbook);
+    assert_eq!(bytes, b"name,code\nAna,5\nLuis,0045\n");
+    assert!(options.text.holds_field(1) && !options.text.holds_field(0));
+    assert_text(&reopened(&path, options), at(2, 1), "0045");
+}
+
+#[test]
+fn booleans_and_errors_stay_what_they_are_when_the_log_is_lost() {
+    let original = b"flag,err\nTRUE,#N/A\nFALSE,#N/A\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (path, workbook, csv) = opened_with(dir.path(), original, TextColumns::default());
+    let kinds = |workbook: &Workbook| {
+        [at(1, 0), at(2, 0), at(1, 1)].map(|pos| workbook.cell(SheetId(0), pos).kind)
+    };
+    let before = kinds(&workbook);
+    let mut asked = request(&path, &csv);
+    asked.binding.log.lose(u64::MAX);
+    asked.binding.accepted.moved_cells = true;
+    let (bytes, options) = saved_as(&asked, workbook);
+    assert_eq!(bytes, original);
+    assert!(options.text.is_empty());
+    assert_eq!(kinds(&reopened(&path, options)), before);
 }

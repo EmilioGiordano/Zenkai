@@ -131,30 +131,36 @@ fn example(field: &str, index: usize) -> Example {
 
 // Scans every row, so callers run it off the UI thread. Sorted by column.
 pub fn find_at_risk(rows: &[Vec<String>]) -> Vec<AtRisk> {
+    at_risk_among(rows.iter().enumerate().flat_map(|(index, row)| {
+        row.iter()
+            .enumerate()
+            .map_while(move |(position, field)| Some((index, column_of(position)?, field.as_str())))
+    }))
+}
+
+// The same over fields given with their row (counted from 0) and column, in row order.
+pub fn at_risk_among<'a>(
+    fields: impl IntoIterator<Item = (usize, ColIdx, &'a str)>,
+) -> Vec<AtRisk> {
     let mut found: BTreeMap<ColIdx, AtRisk> = BTreeMap::new();
-    for (index, row) in rows.iter().enumerate() {
-        for (position, field) in row.iter().enumerate() {
-            let Some(column) = column_of(position) else {
-                break;
-            };
-            let Risks {
-                leading_zero,
-                long_number,
-            } = risks(field);
-            if !leading_zero && !long_number {
-                continue;
-            }
-            let at_risk = found.entry(column).or_insert_with(|| AtRisk {
-                column,
-                leading_zero: None,
-                long_number: None,
-            });
-            if leading_zero && at_risk.leading_zero.is_none() {
-                at_risk.leading_zero = Some(example(field, index));
-            }
-            if long_number && at_risk.long_number.is_none() {
-                at_risk.long_number = Some(example(field, index));
-            }
+    for (index, column, field) in fields {
+        let Risks {
+            leading_zero,
+            long_number,
+        } = risks(field);
+        if !leading_zero && !long_number {
+            continue;
+        }
+        let at_risk = found.entry(column).or_insert_with(|| AtRisk {
+            column,
+            leading_zero: None,
+            long_number: None,
+        });
+        if leading_zero && at_risk.leading_zero.is_none() {
+            at_risk.leading_zero = Some(example(field, index));
+        }
+        if long_number && at_risk.long_number.is_none() {
+            at_risk.long_number = Some(example(field, index));
         }
     }
     found.into_values().collect()
@@ -287,5 +293,21 @@ mod tests {
         assert_eq!(text_input("00123"), "'00123");
         assert_eq!(text_input("'a"), "''a");
         assert_eq!(text_input(""), "");
+    }
+
+    #[test]
+    fn fields_given_with_their_places_are_checked_like_the_rows_of_a_file() {
+        let fields = [
+            (3, col(2), "00123"),
+            (4, col(2), "007"),
+            (0, col(5), "x"),
+            (6, col(0), "9223372036854775807"),
+        ];
+        let found = at_risk_among(fields);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].column, col(0));
+        assert_eq!(found[0].long_number.as_ref().unwrap().row, 7);
+        assert_eq!(found[1].column, col(2));
+        assert_eq!(found[1].leading_zero.as_ref().unwrap().row, 4);
     }
 }

@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use zenkai_engine::{EngineError, FileCell, FileCells, FormatEdits, ShownCells, Workbook};
 use zenkai_formats::{
-    FinalNewline, TextColumns, date_serial, iso_date, neutralize, number_text, stored_number_text,
+    FinalNewline, TextColumns, at_risk_among, date_serial, iso_date, neutralize, number_text,
+    stored_number_text,
 };
 use zenkai_i18n::t;
 use zenkai_types::{
@@ -94,33 +95,16 @@ enum FormulaCells {
 struct Classified {
     shown: ShownCells,
     formulas: FormulaCells,
-    // The columns holding nothing but text, when asked for.
-    text_only: Option<TextColumns>,
 }
 
-// The columns of the sheet whose every cell is text the engine kept as text: read again as Text
-// columns they come back as the same cells, which is what a log that cannot be followed leaves to
-// go by.
-fn text_only_columns(cells: &[FileCell], spilled: &[(CellPos, CellPos)]) -> TextColumns {
-    let mut only_text: BTreeMap<ColIdx, bool> = BTreeMap::new();
-    for cell in cells {
-        let spilled_value = spilled
-            .binary_search_by_key(&(cell.pos.row, cell.pos.col), |(child, _)| {
-                (child.row, child.col)
-            })
-            .is_ok();
-        let is_text = cell.number.is_none()
-            && cell.date.is_none()
-            && !spilled_value
-            && !cell.input().starts_with('=');
-        *only_text.entry(cell.pos.col).or_insert(true) &= is_text;
-    }
-    TextColumns::chosen(
-        only_text
-            .into_iter()
-            .filter(|(_, only_text)| *only_text)
-            .map(|(column, _)| column),
-    )
+// With a log that cannot be followed there is no telling which column is which, so the choice is
+// the one a fresh open of the file as it is now would make.
+fn detected_text_columns(shown: &ShownCells) -> TextColumns {
+    let fields = shown
+        .cells
+        .iter()
+        .map(|(pos, text)| (pos.row.get() as usize, pos.col, text.as_str()));
+    TextColumns::chosen(at_risk_among(fields).iter().map(|risk| risk.column))
 }
 
 // The columns that hold the fields the Text columns of the file held, after columns were
@@ -142,7 +126,6 @@ fn classify(
     trusted: bool,
     options: &CsvOptions,
     file: &mut [Vec<String>],
-    find_text_only: bool,
     cancel: &AtomicBool,
 ) -> Result<Classified, EngineError> {
     let FileCells {
@@ -152,7 +135,6 @@ fn classify(
         spilled,
         ..
     } = found;
-    let text_only = find_text_only.then(|| text_only_columns(&cells, &spilled));
     // The references of a formula the file holds were rewritten by the rows and columns moved, so
     // its text is no longer the sheet's.
     let moved_lines = walk.moves_rows() || walk.moves_columns();
@@ -250,7 +232,6 @@ fn classify(
     Ok(Classified {
         shown: ShownCells { end, cells: out },
         formulas,
-        text_only,
     })
 }
 
@@ -304,19 +285,13 @@ pub fn save_csv_file(
     let own_sheet = request.binding.file_sheet == Some(sheet_key);
     let own_fields = !unknown && !changed && own_sheet;
     let keeps_columns = options.text != TextColumns::Everything;
-    let classified = classify(
-        found,
-        &walk,
-        own_fields,
-        &options,
-        &mut file,
-        keeps_columns && !own_fields,
-        cancel,
-    )?;
-    if let Some(text_only) = classified.text_only {
-        options.text = text_only;
-    } else if keeps_columns && walk.moves_columns() {
-        options.text = moved_text_columns(&options.text, &walk);
+    let classified = classify(found, &walk, own_fields, &options, &mut file, cancel)?;
+    if keeps_columns {
+        if !own_fields {
+            options.text = detected_text_columns(&classified.shown);
+        } else if walk.moves_columns() {
+            options.text = moved_text_columns(&options.text, &walk);
+        }
     }
     drop(file);
     let losses = Losses {
