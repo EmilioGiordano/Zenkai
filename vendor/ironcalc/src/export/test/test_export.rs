@@ -199,6 +199,66 @@ fn an_auto_filter_round_trips_with_the_rows_it_hides() {
 }
 
 #[test]
+fn a_filtered_sheet_gets_one_filter_database_name_that_follows_its_filter() {
+    use ironcalc_base::types::{AutoFilter, DefinedName};
+    let mut model = new_empty_model();
+    model.add_sheet("My Sheet").unwrap();
+    let sheet_ids: Vec<u32> = model
+        .workbook
+        .worksheets
+        .iter()
+        .map(|sheet| sheet.sheet_id)
+        .collect();
+    // A stale one, as a file may hold, and one of a sheet without a filter.
+    for (sheet_id, formula) in [
+        (sheet_ids[1], "'My Sheet'!$A$1:$A$2"),
+        (sheet_ids[0], "Sheet1!$C$1:$C$9"),
+    ] {
+        model.workbook.defined_names.push(DefinedName {
+            name: "_xlnm._FilterDatabase".to_string(),
+            formula: formula.to_string(),
+            sheet_id: Some(sheet_id),
+        });
+    }
+    let filter = AutoFilter {
+        first_row: 2,
+        first_column: 1,
+        last_row: 8,
+        last_column: 2,
+        columns: Vec::new(),
+        filtered_rows: Vec::new(),
+        sort_state: None,
+    };
+    model.set_auto_filter(1, Some(filter)).unwrap();
+    model.evaluate();
+    let temp_file_name = "temp_file_test_filter_database.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let file = fs::File::open(temp_file_name).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut book = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("xl/workbook.xml").unwrap(), &mut book)
+        .unwrap();
+    assert_eq!(book.matches("_xlnm._FilterDatabase").count(), 2, "{book}");
+    assert!(
+        book.contains(
+            r#"<definedName name="_xlnm._FilterDatabase" localSheetId="1" hidden="1">'My Sheet'!$A$2:$B$8</definedName>"#
+        ),
+        "{book}"
+    );
+    assert!(book.contains("Sheet1!$C$1:$C$9"), "{book}");
+
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    let names: Vec<(&str, Option<u32>)> = model
+        .workbook
+        .defined_names
+        .iter()
+        .map(|name| (name.name.as_str(), name.sheet_id))
+        .collect();
+    assert_eq!(names, [("_xlnm._FilterDatabase", Some(sheet_ids[0]))]);
+    fs::remove_file(temp_file_name).unwrap();
+}
+
+#[test]
 fn shown_grid_lines_and_headers_write_no_attribute() {
     let model = new_empty_model();
     let temp_file_name = "temp_file_test_shown_grid_lines_and_headers.xlsx";

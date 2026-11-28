@@ -1,7 +1,42 @@
-use ironcalc_base::expressions::utils::number_to_column;
-use ironcalc_base::types::{AutoFilter, FilterCriteria};
+use ironcalc_base::expressions::utils::{number_to_column, quote_name};
+use ironcalc_base::types::{AutoFilter, FilterCriteria, Worksheet};
 
 use super::escape::escape_xml;
+
+/// The hidden, sheet-scoped name in which Excel keeps the range of a sheet's AutoFilter.
+pub(crate) const FILTER_DATABASE: &str = "_xlnm._FilterDatabase";
+
+pub(crate) fn is_filter_database(name: &str) -> bool {
+    name.eq_ignore_ascii_case(FILTER_DATABASE)
+}
+
+/// A `_xlnm._FilterDatabase` defined name for each sheet with an AutoFilter, written from
+/// the filter so it always names the filter's current range.
+pub(crate) fn get_filter_database_xml(worksheets: &[Worksheet]) -> String {
+    let mut xml = String::new();
+    for (index, worksheet) in worksheets.iter().enumerate() {
+        let Some(filter) = &worksheet.auto_filter else {
+            continue;
+        };
+        let (Some(first), Some(last)) = (
+            number_to_column(filter.first_column),
+            number_to_column(filter.last_column),
+        ) else {
+            continue;
+        };
+        let reference = format!(
+            "{}!${first}${}:${last}${}",
+            quote_name(&worksheet.name),
+            filter.first_row,
+            filter.last_row
+        );
+        xml.push_str(&format!(
+            "<definedName name=\"{FILTER_DATABASE}\" localSheetId=\"{index}\" hidden=\"1\">{}</definedName>",
+            escape_xml(&reference)
+        ));
+    }
+    xml
+}
 
 fn area(first_row: i32, first_column: i32, last_row: i32, last_column: i32) -> Option<String> {
     Some(format!(

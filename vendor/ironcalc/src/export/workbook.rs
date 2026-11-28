@@ -35,6 +35,7 @@ use ironcalc_base::expressions::parser::{new_parser_english, stringify::to_excel
 use ironcalc_base::expressions::types::CellReferenceRC;
 use ironcalc_base::types::{SheetState, Workbook};
 
+use super::auto_filter::{get_filter_database_xml, is_filter_database};
 use super::escape::escape_xml;
 use super::xml_constants::XML_DECLARATION;
 
@@ -82,7 +83,21 @@ pub(crate) fn get_workbook_xml(workbook: &Workbook, selected_sheet: u32) -> Stri
         column: 1,
     };
     let mut defined_names_str: Vec<String> = vec![];
+    let filtered_sheets: Vec<u32> = workbook
+        .worksheets
+        .iter()
+        .filter(|sheet| sheet.auto_filter.is_some())
+        .map(|sheet| sheet.sheet_id)
+        .collect();
     for defined_name in &workbook.defined_names {
+        // Written from the sheet's AutoFilter below.
+        if is_filter_database(&defined_name.name)
+            && defined_name
+                .sheet_id
+                .is_some_and(|id| filtered_sheets.contains(&id))
+        {
+            continue;
+        }
         let name = &defined_name.name;
         let name = escape_xml(name);
         let local_sheet_id = if let Some(sheet_id) = defined_name.sheet_id {
@@ -105,6 +120,7 @@ pub(crate) fn get_workbook_xml(workbook: &Workbook, selected_sheet: u32) -> Stri
         ))
     }
 
+    defined_names_str.push(get_filter_database_xml(&workbook.worksheets));
     let sheets = sheets_str.join("");
     let defined_names = defined_names_str.join("");
     format!("{XML_DECLARATION}\n\
