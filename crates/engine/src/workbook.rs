@@ -2589,6 +2589,17 @@ mod tests {
     use ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX;
     use ironcalc::error::XlsxError;
 
+    #[test]
+    fn a_row_height_a_file_makes_up_never_reaches_the_pixels() {
+        assert_eq!(row_pixels(f64::NAN), 0.0);
+        assert_eq!(row_pixels(f64::NEG_INFINITY), 0.0);
+        assert_eq!(row_pixels(-3.0), 0.0);
+        assert_eq!(row_pixels(1.0e-300), 0.0);
+        assert_eq!(row_pixels(1.0e308), 546.0);
+        assert_eq!(row_pixels(409.5), 546.0);
+        assert_eq!(row_pixels(15.0), 20.0);
+    }
+
     fn counts(book: &Workbook) -> (u64, u64, u64) {
         let edits = book.format_edits();
         (edits.numbers, edits.other, edits.moved)
