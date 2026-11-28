@@ -163,7 +163,8 @@ fn kept_rule(rules: &[Node]) -> Option<String> {
         match visit {
             Visit::Open(n) if n.is_text() => escape_markup(n.text().unwrap_or_default(), &mut xml),
             Visit::Open(n) if n.is_element() => {
-                if n.tag_name().namespace() != Some(MAIN) {
+                // No rule holds a filter, and a writer may look for the filter's end tag.
+                if n.tag_name().namespace() != Some(MAIN) || n.has_tag_name("autoFilter") {
                     return None;
                 }
                 if n.has_tag_name("extLst") {
@@ -323,5 +324,7 @@ mod tests {
             "</top10>".repeat(500)
         );
         assert_eq!(filter_of(&deep).unwrap().columns.len(), 1);
+        let nested = r#"<autoFilter ref="A1:B2"><filterColumn colId="0"><top10><autoFilter/></top10></filterColumn></autoFilter>"#;
+        assert!(filter_of(nested).unwrap().columns.is_empty());
     }
 }
