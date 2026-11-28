@@ -231,6 +231,7 @@ impl CsvPreview {
         .collect();
         h_flex()
             .h(rem_px(ROW_HEIGHT))
+            .w_full()
             .flex_none()
             .gap_2()
             .items_center()
@@ -268,6 +269,7 @@ impl CsvPreview {
         };
         h_flex()
             .h(rem_px(ROW_HEIGHT))
+            .w_full()
             .flex_none()
             .gap_2()
             .items_center()

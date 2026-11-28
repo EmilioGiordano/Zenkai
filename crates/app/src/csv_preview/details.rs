@@ -68,6 +68,7 @@ impl CsvPreview {
             .id("csv-note")
             .role(Role::Status)
             .h(rem_px(NOTE_HEIGHT))
+            .w_full()
             .flex_none()
             .items_start()
             .gap(px(10.0))
@@ -160,6 +161,7 @@ impl CsvPreview {
         let radios = self.render_radios(window, cx);
         h_flex()
             .h(rem_px(PANEL_HEIGHT))
+            .w_full()
             .flex_none()
             .gap(rem_px(16.0))
             .px(px(12.0))

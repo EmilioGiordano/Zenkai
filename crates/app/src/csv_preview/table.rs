@@ -64,6 +64,7 @@ impl CsvPreview {
         let theme = cx.theme();
         let frame = v_flex()
             .h(rem_px(table_height(self.rows_shown)))
+            .w_full()
             .flex_none()
             .border_1()
             .border_color(theme.border)
