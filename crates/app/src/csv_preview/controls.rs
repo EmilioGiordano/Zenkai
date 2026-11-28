@@ -90,6 +90,7 @@ pub fn checkbox_box(checked: bool, theme: &Theme) -> Div {
         .when(checked, |this| {
             this.bg(theme.primary)
                 .text_color(theme.primary_foreground)
+                .text_size(px(12.0))
                 .child("\u{2713}")
         })
 }

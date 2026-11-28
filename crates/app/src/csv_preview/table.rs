@@ -141,7 +141,7 @@ impl CsvPreview {
         let label_color = if selected {
             theme.foreground
         } else {
-            theme.table_head_foreground
+            theme.muted_foreground
         };
         let header = v_flex()
             .id(("csv-column", index))

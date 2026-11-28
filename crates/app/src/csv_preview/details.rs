@@ -34,6 +34,7 @@ impl CsvPreview {
         };
         let line = h_flex()
             .h(rem_px(18.0))
+            .line_height(rem_px(18.0))
             .items_center()
             .gap(px(14.0))
             .children(stops.into_iter().enumerate().map(|(stop, (text, jump))| {
@@ -89,7 +90,13 @@ impl CsvPreview {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(div().h(rem_px(18.0)).truncate().child(intro))
+                    .child(
+                        div()
+                            .h(rem_px(18.0))
+                            .line_height(rem_px(18.0))
+                            .truncate()
+                            .child(intro),
+                    )
                     .child(line),
             )
     }
@@ -114,6 +121,7 @@ impl CsvPreview {
                     Toggled::False
                 })
                 .relative()
+                .w_full()
                 .h(rem_px(24.0))
                 .gap_2()
                 .items_center()
@@ -188,6 +196,7 @@ impl CsvPreview {
                     .child(
                         div()
                             .h(rem_px(36.0))
+                            .line_height(rem_px(18.0))
                             .overflow_hidden()
                             .font_weight(FontWeight::SEMIBOLD)
                             .line_clamp(2)
@@ -196,6 +205,7 @@ impl CsvPreview {
                     .child(
                         h_flex()
                             .h(rem_px(36.0))
+                            .line_height(rem_px(18.0))
                             .overflow_hidden()
                             .gap_1p5()
                             .items_start()

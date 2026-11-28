@@ -212,18 +212,10 @@ pub fn defaults() -> Vec<Binding> {
         bind("shift-tab", FocusPreviousControl, Some("CsvPreview")),
         bind("left", CsvColumnLeft, Some("CsvPreview && !CsvRadios")),
         bind("right", CsvColumnRight, Some("CsvPreview && !CsvRadios")),
-        bind("home", CsvColumnFirst, Some("CsvPreview && !CsvRadios")),
-        bind("end", CsvColumnLast, Some("CsvPreview && !CsvRadios")),
-        bind(
-            "pageup",
-            CsvColumnPageBack,
-            Some("CsvPreview && !CsvRadios"),
-        ),
-        bind(
-            "pagedown",
-            CsvColumnPageForward,
-            Some("CsvPreview && !CsvRadios"),
-        ),
+        bind("home", CsvColumnFirst, Some("CsvPreview")),
+        bind("end", CsvColumnLast, Some("CsvPreview")),
+        bind("pageup", CsvColumnPageBack, Some("CsvPreview")),
+        bind("pagedown", CsvColumnPageForward, Some("CsvPreview")),
         bind("up", ScrollCsvPreviewUp, Some("CsvPreview && !CsvRadios")),
         bind(
             "down",
@@ -457,6 +449,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_column_keys_of_the_csv_preview_work_from_the_radios_too() {
+        for (chord, action) in [
+            ("home", <CsvColumnFirst as Action>::name_for_type()),
+            ("end", <CsvColumnLast as Action>::name_for_type()),
+            ("pageup", <CsvColumnPageBack as Action>::name_for_type()),
+            (
+                "pagedown",
+                <CsvColumnPageForward as Action>::name_for_type(),
+            ),
+        ] {
+            let context = defaults()
+                .into_iter()
+                .find(|binding| binding.chord.as_str() == chord && binding.action.name() == action)
+                .and_then(|binding| binding.context);
+            assert_eq!(context, Some("CsvPreview"), "{chord}");
+        }
+    }
     #[test]
     fn enter_opens_the_csv_preview_only_where_no_control_takes_it() {
         let enter = defaults()
