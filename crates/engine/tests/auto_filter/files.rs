@@ -24,6 +24,8 @@ fn excel_sheet(filter: &str) -> String {
     )
 }
 
+const FILTER_DATABASE: &str = r#"<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Sheet1!$A$1:$C$6</definedName>"#;
+
 const BY_NAME: &str = r#"<autoFilter ref="A1:C6"><filterColumn colId="0"><filters><filter val="x"/></filters></filterColumn></autoFilter>"#;
 
 // Hides rows 3 and 5 too, by a rule only Excel can edit.
@@ -41,7 +43,7 @@ fn xlsx(sheet: &str) -> Vec<u8> {
         ),
         (
             "xl/workbook.xml",
-            r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#.to_string(),
+            format!(r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets><definedNames>{FILTER_DATABASE}</definedNames></workbook>"#),
         ),
         (
             "xl/_rels/workbook.xml.rels",
@@ -63,15 +65,23 @@ fn xlsx(sheet: &str) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
-pub fn sheet_xml(xlsx: &[u8]) -> String {
+fn part_xml(xlsx: &[u8], name: &str) -> String {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(xlsx)).unwrap();
     let mut xml = String::new();
     archive
-        .by_name(SHEET_PART)
+        .by_name(name)
         .unwrap()
         .read_to_string(&mut xml)
         .unwrap();
     xml
+}
+
+pub fn sheet_xml(xlsx: &[u8]) -> String {
+    part_xml(xlsx, SHEET_PART)
+}
+
+pub fn workbook_xml(xlsx: &[u8]) -> String {
+    part_xml(xlsx, "xl/workbook.xml")
 }
 
 fn row_tag(xml: &str, number: u32) -> &str {
@@ -143,8 +153,11 @@ fn a_sheet_filtered_in_excel_opens_filtered() {
 #[test]
 fn open_and_save_keep_the_filter_and_the_rows_it_hides() {
     let dir = tempfile::tempdir().unwrap();
-    let book = open(dir.path(), &xlsx(&excel_sheet(BY_NAME)), XlsxReader::Fast);
-    let copied = sheet_xml(&saved(&book, dir.path()));
+    let original = xlsx(&excel_sheet(BY_NAME));
+    let book = open(dir.path(), &original, XlsxReader::Fast);
+    let copy = saved(&book, dir.path());
+    assert_eq!(workbook_xml(&copy), workbook_xml(&original));
+    let copied = sheet_xml(&copy);
     let written = sheet_xml(&book.to_xlsx().unwrap());
     for xml in [copied, written] {
         assert!(xml.contains(BY_NAME), "{xml}");
@@ -170,6 +183,12 @@ fn every_save_after_an_edit_writes_the_filter_as_it_is_now() {
     let saved_bytes = saved(&book, dir.path());
     let xml = sheet_xml(&saved_bytes);
     assert!(xml.contains(r#"<filter val="y"/>"#), "{xml}");
+    assert_eq!(
+        workbook_xml(&saved_bytes)
+            .matches("_xlnm._FilterDatabase")
+            .count(),
+        1
+    );
     let elsewhere = tempfile::tempdir().unwrap();
     let reopened = open(elsewhere.path(), &saved_bytes, XlsxReader::Fast);
     assert_eq!(hidden_rows(&reopened), [2, 4, 5, 6, 9]);
@@ -180,11 +199,17 @@ fn every_save_after_an_edit_writes_the_filter_as_it_is_now() {
     assert!(xml.contains(r#"<autoFilter ref="A1:C6"/>"#), "{xml}");
     assert!(!xml.contains("filterMode"), "{xml}");
 
-    book.toggle_auto_filter(SHEET, range("A1:C6")).unwrap();
-    let xml = sheet_xml(&saved(&book, dir.path()));
+    book.insert_rows(SHEET, row(1), 1).unwrap();
+    let book_xml = workbook_xml(&saved(&book, dir.path()));
+    assert!(book_xml.contains("Sheet1!$A$2:$C$7"), "{book_xml}");
+
+    book.toggle_auto_filter(SHEET, range("A2:C7")).unwrap();
+    let saved_bytes = saved(&book, dir.path());
+    let xml = sheet_xml(&saved_bytes);
     assert!(!xml.contains("<autoFilter"), "{xml}");
     assert!(!xml.contains("filterMode"), "{xml}");
-    assert!(row_tag(&xml, 9).contains(r#"hidden="1""#), "{xml}");
+    assert!(!workbook_xml(&saved_bytes).contains("_FilterDatabase"));
+    assert!(row_tag(&xml, 10).contains(r#"hidden="1""#), "{xml}");
 }
 
 #[test]

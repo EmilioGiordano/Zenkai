@@ -735,3 +735,13 @@ fn a_sheet_is_saved_in_filter_mode_only_while_its_filter_hides_rows() {
         .unwrap();
     assert!(!files::sheet_xml(&book.to_xlsx().unwrap()).contains("filterMode"));
 }
+
+#[test]
+fn a_new_filter_is_named_for_excel_and_the_name_goes_with_it() {
+    let mut book = people();
+    let name = r#"<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Sheet1!$A$1:$B$7</definedName>"#;
+    assert!(files::workbook_xml(&book.to_xlsx().unwrap()).contains(name));
+    assert!(book.defined_names().is_empty());
+    book.toggle_auto_filter(SHEET, range("A1:B7")).unwrap();
+    assert!(!files::workbook_xml(&book.to_xlsx().unwrap()).contains("_FilterDatabase"));
+}
