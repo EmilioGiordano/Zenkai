@@ -226,6 +226,9 @@ pub struct SheetSettings {
     // The sheet's tab color as the model held it when the file was read, by `color_key`: a
     // save keeps the file's own tabColor element for as long as the model still says that.
     pub tab_color_read: String,
+    // The color was set after the file was read, so a save writes the model's color even
+    // where it equals the one read, such as no color after a color was set and cleared.
+    pub tab_color_changed: bool,
     pub view: String,
     pub format: Option<String>,
     pub print: String,
@@ -242,7 +245,7 @@ impl SheetSettings {
     // `color` is what the model holds now; a color the user changed is written from it, and
     // one that did not change keeps the element the file had.
     pub(crate) fn with_tab_color(mut self, color: &Color) -> SheetSettings {
-        if color_key(color) != self.tab_color_read {
+        if self.tab_color_changed || color_key(color) != self.tab_color_read {
             self.properties = properties_with_tab_color(&self.properties, color);
         }
         self
@@ -311,6 +314,7 @@ impl SheetSettings {
         SheetSettings {
             properties: self.properties.clone(),
             tab_color_read: self.tab_color_read.clone(),
+            tab_color_changed: self.tab_color_changed,
             view: self.view.clone(),
             format: self.format.clone(),
             print: self.print.clone(),
@@ -405,6 +409,12 @@ impl Carried {
             dropped: BTreeMap::new(),
             losses: 0,
             moves: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn tab_color_changed(&mut self, sheet_id: u32) {
+        if let Some(settings) = self.sheets.get_mut(&sheet_id) {
+            settings.tab_color_changed = true;
         }
     }
 

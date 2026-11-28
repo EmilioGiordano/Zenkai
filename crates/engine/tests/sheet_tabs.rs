@@ -7,8 +7,10 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use rust_xlsxwriter::{Color, Workbook as Source};
-use zenkai_engine::{Engine, SaveTarget, Workbook, XlsxReader, open_xlsx_with, save_xlsx};
-use zenkai_types::{Rgb, SheetId, SheetVisibility};
+use zenkai_engine::{
+    Engine, RecalcMode, SaveTarget, Workbook, XlsxReader, open_xlsx_with, save_xlsx,
+};
+use zenkai_types::{CellPos, ColIdx, Rgb, RowIdx, SheetId, SheetVisibility};
 
 const READERS: [XlsxReader; 2] = [XlsxReader::IronCalc, XlsxReader::Fast];
 const BLUE: Rgb = Rgb(0x4472C4);
@@ -555,5 +557,137 @@ fn a_tab_color_that_is_not_a_color_is_no_color() {
     for reader in READERS {
         let book = open(&path, reader);
         assert_eq!(book.sheets()[0].color, None, "{reader:?}");
+    }
+}
+
+fn active_tab(xlsx: &[u8]) -> (usize, String) {
+    let text = part(xlsx, "xl/workbook.xml");
+    let document = roxmltree::Document::parse(&text).unwrap();
+    let tab: usize = document
+        .descendants()
+        .find(|node| node.has_tag_name("workbookView"))
+        .and_then(|node| node.attribute("activeTab"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    (tab, states(xlsx)[tab].1.clone())
+}
+
+#[test]
+fn the_saved_active_tab_is_never_a_hidden_sheet() {
+    let mut book = three_sheets();
+    let check = |book: &Workbook, step: &str| {
+        let (tab, state) = active_tab(&book.to_xlsx().unwrap());
+        assert_eq!(state, "visible", "{step}: sheet {tab}");
+    };
+    book.select_sheet(SheetId(0));
+    book.hide_sheet(SheetId(0)).unwrap();
+    check(&book, "hide 0");
+    book.unhide_sheets(&[SheetId(0)]).unwrap();
+    check(&book, "unhide 0");
+    book.hide_sheet(SheetId(1)).unwrap();
+    check(&book, "hide 1");
+    book.undo().unwrap();
+    check(&book, "undo");
+    book.undo().unwrap();
+    check(&book, "undo again");
+    book.redo().unwrap();
+    book.select_sheet(SheetId(2));
+    book.hide_sheet(SheetId(2)).unwrap();
+    book.select_sheet(SheetId(1));
+    book.undo().unwrap();
+    book.select_sheet(SheetId(2));
+    book.redo().unwrap();
+    check(&book, "redo of a hide of the selected sheet");
+    assert_eq!(visibilities(&book)[2], SheetVisibility::Hidden);
+}
+
+#[test]
+fn the_app_can_select_only_a_visible_sheet() {
+    let mut book = three_sheets();
+    book.hide_sheet(SheetId(1)).unwrap();
+    book.select_sheet(SheetId(0));
+    book.select_sheet(SheetId(1));
+    assert_eq!(active_tab(&book.to_xlsx().unwrap()).0, 0);
+    book.select_sheet(SheetId(2));
+    assert_eq!(active_tab(&book.to_xlsx().unwrap()).0, 2);
+}
+
+#[test]
+fn the_only_visible_sheet_cannot_be_deleted_but_a_hidden_one_can() {
+    let mut book = three_sheets();
+    book.hide_sheet(SheetId(1)).unwrap();
+    book.hide_sheet(SheetId(2)).unwrap();
+    assert!(book.delete_sheet(SheetId(0)).is_err());
+    assert_eq!(book.sheets().len(), 3);
+    book.delete_sheet(SheetId(1)).unwrap();
+    assert_eq!(book.sheets().len(), 2);
+    assert!(book.delete_sheet(SheetId(0)).is_err());
+}
+
+#[test]
+fn deleting_a_sheet_keeps_the_saved_active_tab_on_a_visible_sheet() {
+    let mut book = three_sheets();
+    book.hide_sheet(SheetId(0)).unwrap();
+    book.select_sheet(SheetId(1));
+    book.delete_sheet(SheetId(1)).unwrap();
+    let (_, state) = active_tab(&book.to_xlsx().unwrap());
+    assert_eq!(state, "visible");
+}
+
+#[test]
+fn hiding_and_unhiding_leave_the_next_edit_incremental() {
+    let mut book = three_sheets();
+    let at = |col: u16| CellPos::new(RowIdx::clamped(0), ColIdx::clamped(i64::from(col)));
+    book.set_input(SheetId(0), at(0), "1").unwrap();
+    book.set_input(SheetId(0), at(1), "=A1*2").unwrap();
+    book.hide_sheet(SheetId(1)).unwrap();
+    book.unhide_sheets(&[SheetId(1)]).unwrap();
+    book.hide_sheet(SheetId(2)).unwrap();
+    book.undo().unwrap();
+    book.redo().unwrap();
+    let profile = book.set_input_profiled(SheetId(0), at(0), "5").unwrap();
+    assert_eq!(profile.mode, RecalcMode::Incremental);
+}
+
+fn with_auto_tab_color(path: &Path) {
+    let mut book = Source::new();
+    let sheet = book.add_worksheet();
+    sheet.write_number(0, 0, 1.0).unwrap();
+    sheet.set_tab_color(Color::RGB(0x4472C4));
+    book.save(path).unwrap();
+    rewritten(path, |name, body| {
+        if name == "xl/worksheets/sheet1.xml" {
+            body.replace(r#"<tabColor rgb="FF4472C4"/>"#, r#"<tabColor auto="1"/>"#)
+        } else {
+            body
+        }
+    });
+}
+
+#[test]
+fn clearing_a_color_set_on_a_sheet_that_opened_with_an_automatic_one_removes_the_element() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auto.xlsx");
+    with_auto_tab_color(&path);
+    for reader in READERS {
+        let untouched = open(&path, reader);
+        assert_eq!(untouched.sheets()[0].color, None);
+        let kept = save(&untouched, &dir.path().join("kept.xlsx"));
+        assert_eq!(
+            tab_color(&kept, 1).get("auto").map(String::as_str),
+            Some("1"),
+            "an untouched sheet keeps its element: {reader:?}"
+        );
+
+        let mut book = open(&path, reader);
+        book.set_sheet_color(SheetId(0), Some(GREEN)).unwrap();
+        book.set_sheet_color(SheetId(0), None).unwrap();
+        let saved = save(&book, &dir.path().join("cleared.xlsx"));
+        assert!(
+            tab_color(&saved, 1).is_empty(),
+            "{:?}: {reader:?}",
+            tab_color(&saved, 1)
+        );
     }
 }

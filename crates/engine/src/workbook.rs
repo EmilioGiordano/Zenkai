@@ -693,6 +693,65 @@ impl Workbook {
         evaluated(model, carried, saved, opened.to_vec())
     }
 
+    fn is_only_visible(&self, sheet: SheetId) -> bool {
+        let states = self.model.get_worksheets_properties();
+        let visible = |index: usize| {
+            states
+                .get(index)
+                .is_some_and(|props| props.state == "visible")
+        };
+        visible(sheet.0 as usize) && (0..states.len()).filter(|index| visible(*index)).count() < 2
+    }
+
+    // The sheet a save writes as the active tab: a hidden one would open a workbook on a
+    // sheet Excel does not show. After a change that hid it, the next visible sheet to its
+    // right takes its place, else the nearest on its left; nothing moves when none is visible.
+    fn keep_selection_visible(&mut self) {
+        let visible: Vec<bool> = self
+            .model
+            .get_worksheets_properties()
+            .iter()
+            .map(|props| props.state == "visible")
+            .collect();
+        let selected = self.model.get_selected_sheet() as usize;
+        if visible.get(selected).copied().unwrap_or(false) {
+            return;
+        }
+        let to = (selected + 1..visible.len())
+            .find(|index| visible[*index])
+            .or_else(|| {
+                (0..selected.min(visible.len()))
+                    .rev()
+                    .find(|index| visible[*index])
+            });
+        if let Some(to) = to {
+            self.set_selected_sheet_index(to);
+        }
+    }
+
+    fn set_selected_sheet_index(&mut self, index: usize) {
+        let selected = u32::try_from(index).unwrap_or(0);
+        if let Err(error) = self
+            .model
+            .select_without_invalidation(|model| model.set_selected_sheet(selected))
+        {
+            tracing::warn!(%error, "the active sheet could not be set");
+        }
+    }
+
+    // The app's own active sheet, so what a save writes as the active tab is what was
+    // shown; a sheet that is not visible is never selected.
+    pub fn select_sheet(&mut self, sheet: SheetId) {
+        let visible = self
+            .model
+            .get_worksheets_properties()
+            .get(sheet.0 as usize)
+            .is_some_and(|props| props.state == "visible");
+        if visible && self.model.get_selected_sheet() != sheet.0 {
+            self.set_selected_sheet_index(sheet.0 as usize);
+        }
+    }
+
     // The identity of a sheet that its place in the workbook does not change.
     pub fn sheet_key(&self, sheet: SheetId) -> Option<u32> {
         self.model.sheet_key(sheet.0)
@@ -837,6 +896,7 @@ impl Workbook {
             .step(step, |model, take| profiled(model, take))
             .map_err(rejected);
         self.history_replayed(moved, profile.is_ok(), step);
+        self.keep_selection_visible();
         Ok(self.warmed(profile?))
     }
 
@@ -1733,6 +1793,7 @@ impl Engine for Workbook {
             .step(HistoryStep::Undo, |model, take| take(model))
             .map_err(rejected);
         self.history_replayed(moved, undone.is_ok(), HistoryStep::Undo);
+        self.keep_selection_visible();
         undone
     }
 
@@ -1743,6 +1804,7 @@ impl Engine for Workbook {
             .step(HistoryStep::Redo, |model, take| take(model))
             .map_err(rejected);
         self.history_replayed(moved, redone.is_ok(), HistoryStep::Redo);
+        self.keep_selection_visible();
         redone
     }
 
@@ -2015,11 +2077,18 @@ impl Engine for Workbook {
         self.model.rename_sheet(sheet.0, name).map_err(rejected)
     }
 
+    // Like hiding, deleting never leaves the workbook without a visible sheet.
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
+        if self.is_only_visible(sheet) {
+            return Err(rejected(
+                "the only visible sheet cannot be deleted".to_string(),
+            ));
+        }
         self.model.delete_sheet(sheet.0).map_err(rejected)?;
         // A sheet added next may take the identity of this one, so what is logged for it
         // no longer says what it did.
         self.model.record_unknown();
+        self.keep_selection_visible();
         Ok(())
     }
 
@@ -2040,7 +2109,12 @@ impl Engine for Workbook {
         self.model
             .edit_keeping_cells(|model| model.set_sheet_color(sheet.0, &color))
             .map_err(rejected)
-            .inspect(|()| self.model.count_style_edit())
+            .inspect(|()| {
+                self.model.count_style_edit();
+                if let Some(id) = self.sheet_key(sheet) {
+                    self.carried.tab_color_changed(id);
+                }
+            })
     }
 
     // A workbook keeps one visible sheet, so the last one is refused. The model also moves
@@ -2061,7 +2135,9 @@ impl Engine for Workbook {
         }
         self.model
             .edit_keeping_cells(|model| model.hide_sheet(sheet.0))
-            .map_err(rejected)
+            .map_err(rejected)?;
+        self.keep_selection_visible();
+        Ok(())
     }
 
     // Only sheets that are hidden, never very hidden ones, and all in one undo step.
@@ -2098,7 +2174,9 @@ impl Engine for Workbook {
                 }
                 unhidden
             })
-            .map_err(rejected)
+            .map_err(rejected)?;
+        self.keep_selection_visible();
+        Ok(())
     }
 
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError> {
