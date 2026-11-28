@@ -12,7 +12,7 @@ pub use csv_format::{
     CsvError, Delimiter, Encoding, Fidelity, FinalNewline, LineEnding, MAX_CSV_BYTES, ParsedCsv,
     parse_csv,
 };
-pub use csv_guess::{DecimalMark, Guess, apply, guess, import_input, number_text};
+pub use csv_guess::{DecimalMark, Guess, apply, guess, import_input, number_text, read_field};
 pub use csv_text::{AtRisk, Example, TextColumns, find_at_risk, text_input};
 pub use csv_write::{CsvFormat, CsvWriter, neutralize, write_csv};
 pub use dates::{

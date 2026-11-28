@@ -25,7 +25,18 @@ pub struct Guess {
     pub columns: usize,
 }
 
-// Dates go first: a day-first date written with dots must not be read as a grouped number.
+// What the import makes of one field of a General column, or None when it stays. Dates go
+// first: a day-first date written with dots must not be read as a grouped number.
+pub fn read_field(decimal_mark: DecimalMark, date_order: DateOrder, field: &str) -> Option<String> {
+    let dated = (date_order == DateOrder::DayFirst)
+        .then(|| day_first_field(field))
+        .flatten();
+    let decimal = (decimal_mark == DecimalMark::Comma)
+        .then(|| decimal_comma_field(dated.as_deref().unwrap_or(field)))
+        .flatten();
+    decimal.or(dated)
+}
+
 // The fields of a Text column are left as written.
 pub fn apply(
     decimal_mark: DecimalMark,
@@ -47,14 +58,7 @@ pub fn apply(
             if text.holds(column) {
                 continue;
             }
-            if date_order == DateOrder::DayFirst
-                && let Some(rewritten) = day_first_field(field)
-            {
-                *field = rewritten;
-            }
-            if decimal_mark == DecimalMark::Comma
-                && let Some(rewritten) = decimal_comma_field(field)
-            {
+            if let Some(rewritten) = read_field(decimal_mark, date_order, field) {
                 *field = rewritten;
             }
         }
@@ -256,5 +260,21 @@ mod tests {
             &mut none,
         );
         assert_eq!(none[0], ["1.5", "1.5", "2026-10-08"]);
+    }
+
+    #[test]
+    fn one_field_is_read_the_way_apply_reads_it() {
+        let comma = DecimalMark::Comma;
+        let dot = DecimalMark::Dot;
+        assert_eq!(
+            read_field(comma, DateOrder::DayFirst, "08/10/2026").as_deref(),
+            Some("2026-10-08")
+        );
+        assert_eq!(
+            read_field(comma, DateOrder::MonthFirst, "1,5").as_deref(),
+            Some("1.5")
+        );
+        assert_eq!(read_field(dot, DateOrder::MonthFirst, "1,5"), None);
+        assert_eq!(read_field(comma, DateOrder::DayFirst, "Ana"), None);
     }
 }
