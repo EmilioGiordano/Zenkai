@@ -14,7 +14,9 @@ use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::inputs_plan::plan_inputs;
-use crate::model::{CachedModel, HistoryStep, content_cells_within, for_each_within};
+use crate::model::{
+    CachedModel, HistoryStep, content_cells_up_to, content_cells_within, for_each_within,
+};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
@@ -22,8 +24,8 @@ use crate::sheet_settings::{Carried, SheetSettings};
 use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, ContentSpan, Contents,
-    DefinedName, HAlign, LineAxis, LineChange, LineOp, Range, Rgb, RowIdx, SheetChange, SheetId,
-    SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
+    DefinedName, HAlign, LineAxis, LineChange, LineOp, LineSize, Range, Rgb, RowIdx, SheetChange,
+    SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -156,6 +158,21 @@ pub trait Engine: Send {
         row: RowIdx,
         pixels: f32,
     ) -> Result<(), EngineError>;
+    // Many rows or columns at once, in one undo step; the setters above scan the entries
+    // for every line. A column run is `(first, last, pixels)`.
+    fn set_row_heights(
+        &mut self,
+        sheet: SheetId,
+        heights: &[(RowIdx, f32)],
+    ) -> Result<(), EngineError>;
+    fn set_column_widths(
+        &mut self,
+        sheet: SheetId,
+        runs: &[(ColIdx, ColIdx, f32)],
+    ) -> Result<(), EngineError>;
+    // What one column or row measures, without reading the sizes of the whole sheet.
+    fn column_size(&self, sheet: SheetId, col: ColIdx) -> LineSize;
+    fn row_size(&self, sheet: SheetId, row: RowIdx) -> LineSize;
     // The size of every column or row of the sheet that has no entry of its own, as Excel
     // sets it for a whole-sheet selection. The pixels must be above zero. Rows that carry a
     // stored automatic height take it too, as Excel's rows do; rows and columns with a size
@@ -174,6 +191,8 @@ pub trait Engine: Send {
     fn used_end(&self, sheet: SheetId) -> CellPos;
     fn defined_names(&self) -> Vec<DefinedName>;
     fn filled_cells(&self, sheet: SheetId) -> Vec<CellPos>;
+    // The first `limit` filled cells inside `range`, by row; the rest of the sheet is not read.
+    fn filled_cells_within(&self, sheet: SheetId, range: Range, limit: usize) -> Vec<CellPos>;
     fn add_sheet(&mut self) -> Result<SheetId, EngineError>;
     fn duplicate_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError>;
@@ -308,6 +327,30 @@ fn row_pixels(points: f64) -> f32 {
     (points.min(MAX_POINTS) * PIXELS_PER_POINT).round() as f32
 }
 
+// IronCalc's row height for `pixels`: Excel's tallest row is 409.5 points, and what is not
+// a size maps to zero.
+fn height_of(pixels: f32) -> f64 {
+    let pixels = if pixels.is_finite() {
+        f64::from(pixels)
+    } else {
+        0.0
+    };
+    (pixels / PIXELS_PER_POINT).clamp(0.0, MAX_POINTS) * ROW_HEIGHT_FACTOR
+}
+
+// IronCalc's own entries (a whole-column style) carry its default width without customWidth
+// and draw at the sheet's width; any other stored width is the file's. `None` is no size
+// of its own.
+fn own_width(col: &ironcalc::base::types::Col) -> Option<f32> {
+    if col.hidden {
+        Some(0.0)
+    } else if col.has_default_width() {
+        None
+    } else {
+        Some(column_units::pixels_of(col.width))
+    }
+}
+
 // A default of zero would hide every line, which a sheet default never does.
 fn visible_pixels(pixels: f32) -> Result<f64, EngineError> {
     if pixels.is_finite() && pixels > 0.0 {
@@ -318,6 +361,25 @@ fn visible_pixels(pixels: f32) -> Result<f64, EngineError> {
 }
 
 impl Workbook {
+    // What a column and a row with no size of their own measure, when the sheet says.
+    fn default_sizes_of(
+        &self,
+        ws: &ironcalc::base::types::Worksheet,
+    ) -> (Option<f32>, Option<f32>) {
+        let settings = self.carried.get(ws.sheet_id);
+        let column = ws
+            .default_sizes
+            .column_width
+            .or_else(|| settings.and_then(SheetSettings::file_column_width))
+            .map(column_units::pixels_of);
+        let row = ws
+            .default_sizes
+            .row_height
+            .or_else(|| settings.and_then(SheetSettings::file_row_height))
+            .map(row_pixels);
+        (column, row)
+    }
+
     fn change_default_sizes(
         &mut self,
         sheet: SheetId,
@@ -835,11 +897,15 @@ impl Workbook {
     }
 
     // `edit` must not fill, extend or move rows or columns: a fill opens its own undo step
-    // and the carried row data counts one move per step.
+    // and the carried row data counts one move per step. Inside a step that is open, the
+    // edits join it.
     pub fn as_one_undo_step<T>(
         &mut self,
         edit: impl FnOnce(&mut Workbook) -> Result<T, EngineError>,
     ) -> Result<T, EngineError> {
+        if self.model.is_edit_group_open() {
+            return edit(self);
+        }
         self.model
             .edit_keeping_cells(|model| {
                 model.begin_edit_group()?;
@@ -1733,7 +1799,7 @@ impl Engine for Workbook {
     ) -> Result<(), EngineError> {
         self.model
             .edit_keeping_cells(|model| {
-                model.set_rows_hidden(
+                model.set_rows_hidden_in_bulk(
                     sheet.0,
                     row_i32(range.start.row),
                     row_i32(range.end.row),
@@ -1788,23 +1854,22 @@ impl Engine for Workbook {
             return SheetSizes::default();
         };
         // Inserting columns keeps the ranges it pushes past the sheet, so undo restores them.
-        let columns = ws
+        let entries = ws
             .cols
             .iter()
             .filter(|c| c.min <= i32::from(zenkai_types::MAX_COLS))
-            // IronCalc's own entries (a whole-column style) carry its default width without
-            // customWidth and draw at the grid default; any other stored width is the file's.
-            .filter(|c| c.hidden || !c.has_default_width())
-            .map(|c| ColumnSpan {
-                first: ColIdx::clamped(i64::from(c.min) - 1),
-                last: ColIdx::clamped(i64::from(c.max) - 1),
-                width: if c.hidden {
-                    0.0
-                } else {
-                    column_units::pixels_of(c.width)
-                },
+            .map(|c| (c.min.max(1), c.max, own_width(c)));
+        let mut columns: Vec<ColumnSpan> = column_units::first_wins(entries)
+            .into_iter()
+            .filter_map(|(first, last, width)| {
+                Some(ColumnSpan {
+                    first: ColIdx::clamped(i64::from(first) - 1),
+                    last: ColIdx::clamped(i64::from(last) - 1),
+                    width: width?,
+                })
             })
             .collect();
+        columns.sort_by_key(|span| span.first);
         let rows = ws
             .rows
             .iter()
@@ -1814,17 +1879,7 @@ impl Engine for Workbook {
                 (RowIdx::clamped(i64::from(r.r) - 1), height)
             })
             .collect();
-        let settings = self.carried.get(ws.sheet_id);
-        let default_column_width = ws
-            .default_sizes
-            .column_width
-            .or_else(|| settings.and_then(SheetSettings::file_column_width))
-            .map(column_units::pixels_of);
-        let default_row_height = ws
-            .default_sizes
-            .row_height
-            .or_else(|| settings.and_then(SheetSettings::file_row_height))
-            .map(row_pixels);
+        let (default_column_width, default_row_height) = self.default_sizes_of(ws);
         SheetSizes {
             columns,
             rows,
@@ -1862,13 +1917,7 @@ impl Engine for Workbook {
         pixels: f32,
     ) -> Result<(), EngineError> {
         let row = row_i32(row);
-        let height = (if pixels.is_finite() {
-            f64::from(pixels)
-        } else {
-            0.0
-        } / PIXELS_PER_POINT)
-            .clamp(0.0, MAX_POINTS)
-            * ROW_HEIGHT_FACTOR;
+        let height = height_of(pixels);
         self.model
             .edit_keeping_cells(|model| model.set_rows_height(sheet.0, row, row, height))
             .map_err(rejected)
@@ -1876,8 +1925,29 @@ impl Engine for Workbook {
     }
 
     fn set_default_column_width(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
-        let width = column_units::stored_width(visible_pixels(pixels)?);
-        self.change_default_sizes(sheet, |sizes| sizes.column_width = Some(width))
+        let pixels = visible_pixels(pixels)?;
+        let width = column_units::stored_width(pixels);
+        let styled: Vec<(ColIdx, ColIdx, f32)> = self
+            .model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .map_err(rejected)?
+            .cols
+            .iter()
+            .filter(|col| !col.hidden && col.has_default_width())
+            .map(|col| {
+                (
+                    ColIdx::clamped(i64::from(col.min) - 1),
+                    ColIdx::clamped(i64::from(col.max) - 1),
+                    pixels as f32,
+                )
+            })
+            .collect();
+        self.as_one_undo_step(|book| {
+            book.change_default_sizes(sheet, |sizes| sizes.column_width = Some(width))?;
+            book.set_column_widths(sheet, &styled)
+        })
     }
 
     fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
@@ -1893,14 +1963,103 @@ impl Engine for Workbook {
             .filter(|row| !row.custom_height && !row.hidden)
             .map(|row| row.r)
             .collect();
-        self.change_default_sizes(sheet, |sizes| sizes.row_height = Some(points))?;
-        self.model
-            .edit_keeping_cells(|model| {
-                automatic.iter().try_for_each(|row| {
-                    model.set_rows_height(sheet.0, *row, *row, points * ROW_HEIGHT_FACTOR)
+        self.as_one_undo_step(|book| {
+            book.change_default_sizes(sheet, |sizes| sizes.row_height = Some(points))?;
+            book.model
+                .edit_keeping_cells(|model| {
+                    let heights: Vec<(i32, f64)> = automatic
+                        .iter()
+                        .map(|row| (*row, points * ROW_HEIGHT_FACTOR))
+                        .collect();
+                    model.set_row_heights(sheet.0, &heights)
                 })
-            })
+                .map_err(rejected)
+        })
+    }
+
+    fn set_row_heights(
+        &mut self,
+        sheet: SheetId,
+        heights: &[(RowIdx, f32)],
+    ) -> Result<(), EngineError> {
+        let heights: Vec<(i32, f64)> = heights
+            .iter()
+            .map(|(row, pixels)| (row_i32(*row), height_of(*pixels)))
+            .collect();
+        self.model
+            .edit_keeping_cells(|model| model.set_row_heights(sheet.0, &heights))
             .map_err(rejected)
+            .inspect(|()| self.model.count_style_edit())
+    }
+
+    fn set_column_widths(
+        &mut self,
+        sheet: SheetId,
+        runs: &[(ColIdx, ColIdx, f32)],
+    ) -> Result<(), EngineError> {
+        let runs: Vec<(i32, i32, f64)> = runs
+            .iter()
+            .map(|(first, last, pixels)| {
+                let width = column_units::stored_width(f64::from(*pixels));
+                (col_i32(*first), col_i32(*last), width * COLUMN_WIDTH_FACTOR)
+            })
+            .collect();
+        self.model
+            .edit_keeping_cells(|model| model.set_column_widths(sheet.0, &runs))
+            .map_err(rejected)
+            .inspect(|()| self.model.count_style_edit())
+    }
+
+    fn column_size(&self, sheet: SheetId, col: ColIdx) -> LineSize {
+        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
+            return LineSize {
+                pixels: zenkai_types::DEFAULT_COL_WIDTH,
+                own: false,
+            };
+        };
+        let at = col_i32(col);
+        let own = ws
+            .cols
+            .iter()
+            .find(|entry| entry.min <= at && at <= entry.max)
+            .and_then(own_width);
+        match own {
+            Some(pixels) => LineSize { pixels, own: true },
+            None => LineSize {
+                pixels: self
+                    .default_sizes_of(ws)
+                    .0
+                    .unwrap_or(zenkai_types::DEFAULT_COL_WIDTH),
+                own: false,
+            },
+        }
+    }
+
+    fn row_size(&self, sheet: SheetId, row: RowIdx) -> LineSize {
+        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
+            return LineSize {
+                pixels: zenkai_types::DEFAULT_ROW_HEIGHT,
+                own: false,
+            };
+        };
+        let at = row_i32(row);
+        match ws.rows.iter().find(|entry| entry.r == at) {
+            Some(entry) if entry.hidden => LineSize {
+                pixels: 0.0,
+                own: true,
+            },
+            Some(entry) if entry.custom_height => LineSize {
+                pixels: row_pixels(entry.height),
+                own: true,
+            },
+            _ => LineSize {
+                pixels: self
+                    .default_sizes_of(ws)
+                    .1
+                    .unwrap_or(zenkai_types::DEFAULT_ROW_HEIGHT),
+                own: false,
+            },
+        }
     }
 
     fn frozen(&self, sheet: SheetId) -> (u32, u16) {
@@ -2051,6 +2210,15 @@ impl Engine for Workbook {
             .collect();
         cells.retain(|pos| !self.input(sheet, *pos).is_empty());
         cells.sort_by_key(|pos| (pos.row, pos.col));
+        cells
+    }
+
+    fn filled_cells_within(&self, sheet: SheetId, range: Range, limit: usize) -> Vec<CellPos> {
+        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
+            return Vec::new();
+        };
+        let mut cells = content_cells_up_to(&ws.sheet_data, range, limit);
+        cells.retain(|pos| !self.input(sheet, *pos).is_empty());
         cells
     }
 
