@@ -27,14 +27,18 @@ impl CopyShape {
     // manually hidden lines but skips rows a filter hides; a filter will extend the plain case.
     pub fn of(range: Range, scope: CopyScope, layout: &Layout) -> CopyShape {
         match scope {
-            CopyScope::Plain => CopyShape {
-                rows: vec![(range.start.row, range.end.row)],
-                cols: vec![(range.start.col, range.end.col)],
-            },
+            CopyScope::Plain => CopyShape::whole(range),
             CopyScope::VisibleOnly => CopyShape {
                 rows: layout.shown_row_runs(range.start.row, range.end.row),
                 cols: layout.shown_col_runs(range.start.col, range.end.col),
             },
+        }
+    }
+
+    pub fn whole(range: Range) -> CopyShape {
+        CopyShape {
+            rows: vec![(range.start.row, range.end.row)],
+            cols: vec![(range.start.col, range.end.col)],
         }
     }
 

@@ -1,5 +1,7 @@
 use zenkai_engine::{Engine, Workbook};
-use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, ValueKind};
+use zenkai_types::{CellPos, SheetId, ValueKind};
+
+use crate::visible_cells::CopyShape;
 
 pub const MAX_COPY_CELLS: u64 = 1_000_000;
 
@@ -23,16 +25,14 @@ pub fn values_only(text: &str) -> Vec<Vec<String>> {
 }
 
 // The values of copied cells: numbers at full precision, everything else as shown.
-pub fn cell_values(workbook: &Workbook, sheet: SheetId, range: Range) -> Vec<Vec<String>> {
-    (range.start.row.get()..=range.end.row.get())
+pub fn cell_values(workbook: &Workbook, sheet: SheetId, shape: &CopyShape) -> Vec<Vec<String>> {
+    shape
+        .rows()
         .map(|row| {
-            (range.start.col.get()..=range.end.col.get())
+            shape
+                .cols()
                 .map(|col| {
-                    let pos = CellPos::new(
-                        RowIdx::clamped(i64::from(row)),
-                        ColIdx::clamped(i64::from(col)),
-                    );
-                    let view = workbook.cell(sheet, pos);
+                    let view = workbook.cell(sheet, CellPos::new(row, col));
                     match (view.kind, view.number) {
                         (ValueKind::Number, Some(number)) => number.to_string(),
                         _ if view.text.starts_with('=') => format!("'{}", view.text),
@@ -42,6 +42,41 @@ pub fn cell_values(workbook: &Workbook, sheet: SheetId, range: Range) -> Vec<Vec
                 .collect()
         })
         .collect()
+}
+
+pub fn shown_text(workbook: &Workbook, sheet: SheetId, shape: &CopyShape) -> String {
+    let rows: Vec<Vec<String>> = shape
+        .rows()
+        .map(|row| {
+            shape
+                .cols()
+                .map(|col| workbook.cell(sheet, CellPos::new(row, col)).text)
+                .collect()
+        })
+        .collect();
+    tsv(&rows)
+}
+
+// Quotes like the engine's own clipboard text, so `parse_tsv` reads it back.
+pub fn tsv(rows: &[Vec<String>]) -> String {
+    let field = |text: &str| {
+        if text.contains(['\t', '\n', '\r', '"']) {
+            format!("\"{}\"", text.replace('"', "\"\""))
+        } else {
+            text.to_string()
+        }
+    };
+    rows.iter()
+        .map(|row| match row.as_slice() {
+            [only] if only.is_empty() => "\"\"".to_string(),
+            _ => row
+                .iter()
+                .map(|text| field(text))
+                .collect::<Vec<_>>()
+                .join("\t"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
@@ -94,6 +129,7 @@ pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zenkai_types::Range;
 
     #[test]
     fn copied_cells_paste_their_full_precision_values() {
@@ -108,8 +144,45 @@ mod tests {
         let range = Range::parse_a1("A1:C1").unwrap();
         book.set_number_format(SheetId(0), range, "0.00").unwrap();
         assert_eq!(
-            cell_values(&book, SheetId(0), range),
+            cell_values(&book, SheetId(0), &CopyShape::whole(range)),
             vec![vec!["3.14159", "6.28318", "hola"]]
+        );
+    }
+
+    #[test]
+    fn shown_text_joins_the_cells_of_a_shape_with_tabs_and_lines() {
+        let mut book = Workbook::new_empty().unwrap();
+        let rows = vec![
+            vec!["1".to_string(), "a".to_string()],
+            vec!["2".to_string(), "b".to_string()],
+        ];
+        book.set_inputs(SheetId(0), CellPos::default(), &rows)
+            .unwrap();
+        let shape = CopyShape::whole(Range::parse_a1("A1:B2").unwrap());
+        assert_eq!(shown_text(&book, SheetId(0), &shape), "1\ta\n2\tb");
+    }
+
+    #[test]
+    fn tsv_quotes_what_would_break_a_field_and_parses_back() {
+        let rows = vec![
+            vec!["a\tb".to_string(), "say \"hi\"".to_string()],
+            vec!["two\nlines".to_string(), String::new()],
+            vec![String::new()],
+            vec!["end".to_string()],
+        ];
+        let text = tsv(&rows);
+        assert_eq!(
+            text,
+            "\"a\tb\"\t\"say \"\"hi\"\"\"\n\"two\nlines\"\t\n\"\"\nend"
+        );
+        assert_eq!(
+            parse_tsv(&text),
+            vec![
+                vec!["a\tb", "say \"hi\""],
+                vec!["two\nlines", ""],
+                vec![String::new()],
+                vec!["end"]
+            ]
         );
     }
 
