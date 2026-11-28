@@ -115,6 +115,38 @@ fn frozen_columns() {
 }
 
 #[test]
+fn hidden_grid_lines_and_headers_round_trip() {
+    let mut model = new_empty_model();
+    model.set_show_grid_lines(0, false).unwrap();
+    model.set_show_row_col_headers(0, false).unwrap();
+    model.evaluate();
+    let temp_file_name = "temp_file_test_hidden_grid_lines_and_headers.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    assert!(!model.workbook.worksheet(0).unwrap().show_grid_lines);
+    assert!(!model.workbook.worksheet(0).unwrap().show_row_col_headers);
+    fs::remove_file(temp_file_name).unwrap();
+}
+
+#[test]
+fn shown_grid_lines_and_headers_write_no_attribute() {
+    let model = new_empty_model();
+    let temp_file_name = "temp_file_test_shown_grid_lines_and_headers.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let file = fs::File::open(temp_file_name).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut sheet = String::new();
+    std::io::Read::read_to_string(
+        &mut archive.by_name("xl/worksheets/sheet1.xml").unwrap(),
+        &mut sheet,
+    )
+    .unwrap();
+    assert!(!sheet.contains("showGridLines"));
+    assert!(!sheet.contains("showRowColHeaders"));
+    fs::remove_file(temp_file_name).unwrap();
+}
+
+#[test]
 fn frozen_rows_and_columns() {
     let mut model = new_empty_model();
     model.set_frozen_rows(0, 23).unwrap();

@@ -1,3 +1,4 @@
+use gpui_kit::base::Disableable;
 use gpui_kit::component::command::{CommandGroup, CommandItem};
 use gpui_kit::*;
 use zenkai_i18n::t;
@@ -9,6 +10,57 @@ use crate::actions::*;
 pub struct Entry {
     pub label: &'static str,
     pub action: Box<dyn Action>,
+    pub toggle: Option<Toggle>,
+}
+
+// The View commands that show or hide part of the screen; the palette checks the ones shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toggle {
+    Gridlines,
+    FormulaBar,
+    Headings,
+}
+
+// Read when the palette opens. Gridlines and Headings belong to the sheet on screen, so
+// they are `None` while no workbook is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Toggles {
+    pub gridlines: Option<bool>,
+    pub headings: Option<bool>,
+    pub formula_bar: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToggleRow {
+    pub checked: bool,
+    pub enabled: bool,
+}
+
+impl Toggles {
+    pub fn row(self, toggle: Toggle) -> ToggleRow {
+        let sheet_flag = |shown: Option<bool>| ToggleRow {
+            checked: shown == Some(true),
+            enabled: shown.is_some(),
+        };
+        match toggle {
+            Toggle::Gridlines => sheet_flag(self.gridlines),
+            Toggle::Headings => sheet_flag(self.headings),
+            Toggle::FormulaBar => ToggleRow {
+                checked: self.formula_bar,
+                enabled: true,
+            },
+        }
+    }
+}
+
+impl Toggle {
+    fn keywords(self) -> &'static str {
+        match self {
+            Toggle::Gridlines => t!("palette.keywords.gridlines"),
+            Toggle::FormulaBar => t!("palette.keywords.formula_bar"),
+            Toggle::Headings => t!("palette.keywords.headings"),
+        }
+    }
 }
 
 pub struct Group {
@@ -20,6 +72,14 @@ fn item(label: &'static str, action: impl Action) -> Entry {
     Entry {
         label,
         action: Box::new(action),
+        toggle: None,
+    }
+}
+
+fn toggle_item(label: &'static str, action: impl Action, toggle: Toggle) -> Entry {
+    Entry {
+        toggle: Some(toggle),
+        ..item(label, action)
     }
 }
 
@@ -30,7 +90,7 @@ fn group(label: &'static str, entries: impl IntoIterator<Item = Entry>) -> Group
     }
 }
 
-pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
+pub fn groups(recent: &[std::path::PathBuf], toggles: Toggles) -> Vec<CommandGroup> {
     let open_recent: [Box<dyn Action>; crate::recent::MAX_RECENT] = [
         Box::new(OpenRecent1),
         Box::new(OpenRecent2),
@@ -53,10 +113,25 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             group
                 .entries
                 .into_iter()
-                .map(|entry| CommandItem::new().label(entry.label).action(entry.action)),
+                .map(|entry| command_item(entry, toggles)),
         )
     }))
     .collect()
+}
+
+fn command_item(entry: Entry, toggles: Toggles) -> CommandItem {
+    let command = CommandItem::new().label(entry.label);
+    let command = match entry.toggle {
+        Some(toggle) => {
+            let row = toggles.row(toggle);
+            command
+                .keywords(toggle.keywords().split(',').map(str::trim))
+                .checked(row.checked)
+                .disabled(!row.enabled)
+        }
+        None => command,
+    };
+    command.action(entry.action)
 }
 
 pub fn table() -> Vec<Group> {
@@ -183,6 +258,13 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.zoom_reset"), ZoomReset),
                 item(t!("palette.reset_document_zoom"), ResetDocumentZoom),
                 item(t!("palette.toggle_formulas"), ToggleFormulas),
+                toggle_item(t!("palette.gridlines"), ToggleGridlines, Toggle::Gridlines),
+                toggle_item(
+                    t!("palette.formula_bar"),
+                    ToggleFormulaBar,
+                    Toggle::FormulaBar,
+                ),
+                toggle_item(t!("palette.headings"), ToggleHeadings, Toggle::Headings),
                 item(t!("palette.summary_average"), ToggleSummaryAverage),
                 item(t!("palette.summary_count"), ToggleSummaryCount),
                 item(
@@ -318,4 +400,97 @@ pub fn table() -> Vec<Group> {
             ],
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: with gpui_kit's glob, `#[test]` would resolve to gpui's own `test`
+    // macro, which expands to itself.
+    use gpui_kit::Action;
+    use zenkai_i18n::t;
+
+    use super::{Toggle, Toggles, table};
+    use crate::actions::{ToggleFormulaBar, ToggleFormulas, ToggleGridlines, ToggleHeadings};
+
+    const SHOWN: Toggles = Toggles {
+        gridlines: Some(true),
+        headings: Some(true),
+        formula_bar: true,
+    };
+
+    #[test]
+    fn what_is_shown_is_checked_and_what_is_hidden_is_not() {
+        let mixed = Toggles {
+            gridlines: Some(false),
+            headings: Some(true),
+            formula_bar: false,
+        };
+        assert!(!mixed.row(Toggle::Gridlines).checked);
+        assert!(mixed.row(Toggle::Headings).checked);
+        assert!(!mixed.row(Toggle::FormulaBar).checked);
+        assert!(SHOWN.row(Toggle::FormulaBar).checked);
+        for toggle in [Toggle::Gridlines, Toggle::Headings, Toggle::FormulaBar] {
+            assert!(mixed.row(toggle).enabled && SHOWN.row(toggle).enabled);
+        }
+    }
+
+    #[test]
+    fn with_no_workbook_gridlines_and_headings_are_disabled_and_unchecked() {
+        let none = Toggles {
+            gridlines: None,
+            headings: None,
+            formula_bar: false,
+        };
+        for toggle in [Toggle::Gridlines, Toggle::Headings] {
+            let row = none.row(toggle);
+            assert!(!row.checked && !row.enabled, "{toggle:?}");
+        }
+        let row = none.row(Toggle::FormulaBar);
+        assert!(row.enabled && !row.checked);
+    }
+
+    #[test]
+    fn the_view_group_has_the_three_after_show_formulas_in_excels_order() {
+        let table = table();
+        let view = table
+            .iter()
+            .find(|group| group.label == t!("palette.group.view"))
+            .unwrap();
+        let names: Vec<&str> = view
+            .entries
+            .iter()
+            .map(|entry| entry.action.name())
+            .collect();
+        let formulas = names
+            .iter()
+            .position(|name| *name == ToggleFormulas.name())
+            .unwrap();
+        assert_eq!(
+            names[formulas + 1..formulas + 4],
+            [
+                ToggleGridlines.name(),
+                ToggleFormulaBar.name(),
+                ToggleHeadings.name()
+            ]
+        );
+    }
+
+    #[test]
+    fn the_search_finds_each_command_by_the_whole_phrases_people_type() {
+        let found = |toggle: Toggle, phrase: &str| {
+            toggle
+                .keywords()
+                .split(',')
+                .map(str::trim)
+                .any(|keyword| keyword.contains(phrase))
+        };
+        assert!(found(Toggle::Gridlines, "hide gridlines"));
+        assert!(found(Toggle::Gridlines, "show gridlines"));
+        assert!(found(Toggle::Headings, "hide row and column headings"));
+        assert!(found(Toggle::Headings, "show row and column headings"));
+        assert!(found(Toggle::Headings, "column letters"));
+        assert!(found(Toggle::Headings, "row numbers"));
+        assert!(found(Toggle::FormulaBar, "hide formula bar"));
+        assert!(found(Toggle::FormulaBar, "name box"));
+    }
 }

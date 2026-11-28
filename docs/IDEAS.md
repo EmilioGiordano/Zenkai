@@ -89,3 +89,7 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
     signing certificate, used by the release job, would remove the warning once the signature
     earns reputation. It would sit next to the minisign signature the updater checks, never
     replace it.
+
+14. **Formula Bar in Settings.** The View command Formula Bar is only in the command palette;
+    a row in the Settings window, next to the other general options, would show it where
+    people look for display settings.

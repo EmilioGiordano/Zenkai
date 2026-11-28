@@ -75,6 +75,9 @@ fn no_grid() {
         assert_eq!(no_grid_sheet.name, "NoGrid".to_string());
         // There is also no headers
         assert!(!no_grid_no_headers_sheet.show_grid_lines);
+        assert!(!no_grid_no_headers_sheet.show_row_col_headers);
+        assert!(no_grid_sheet.show_row_col_headers);
+        assert!(sheet2.show_row_col_headers);
     }
     {
         // save it and check again
@@ -97,6 +100,9 @@ fn no_grid() {
         assert_eq!(no_grid_sheet.name, "NoGrid".to_string());
         // There is also no headers
         assert!(!no_grid_no_headers_sheet.show_grid_lines);
+        assert!(!no_grid_no_headers_sheet.show_row_col_headers);
+        assert!(no_grid_sheet.show_row_col_headers);
+        assert!(sheet2.show_row_col_headers);
         fs::remove_file(temp_file_name).unwrap();
     }
 }
