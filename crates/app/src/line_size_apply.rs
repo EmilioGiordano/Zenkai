@@ -1,5 +1,5 @@
 use zenkai_engine::{Engine, EngineError, Workbook};
-use zenkai_types::{CellPos, ColIdx, LineAxis, Range, RowIdx, SheetId, SheetSizes};
+use zenkai_types::{ColIdx, LineAxis, RowIdx, SheetId, SheetSizes};
 
 use crate::line_size::{Lines, Size};
 
@@ -17,57 +17,41 @@ fn set_hidden(
     lines: Lines,
     hidden: bool,
 ) -> Result<(), EngineError> {
+    let range = lines.range();
     match lines.axis {
-        LineAxis::Row => {
-            let range = Range::new(
-                CellPos::new(row_at(lines.first), ColIdx::default()),
-                CellPos::new(row_at(lines.last), ColIdx::LAST),
-            );
-            wb.set_rows_hidden(sheet, range, hidden)
-        }
-        LineAxis::Column => {
-            let range = Range::new(
-                CellPos::new(RowIdx::default(), column_at(lines.first)),
-                CellPos::new(RowIdx::LAST, column_at(lines.last)),
-            );
-            wb.set_columns_hidden(sheet, range, hidden)
-        }
+        LineAxis::Row => wb.set_rows_hidden(sheet, range, hidden),
+        LineAxis::Column => wb.set_columns_hidden(sheet, range, hidden),
     }
 }
 
-fn set_size(
+// Rows are shown in one pass over the sheet's entries. Columns are shown run by run: a sheet
+// has at most 16,384 of them.
+fn show_hidden(
     wb: &mut Workbook,
     sheet: SheetId,
-    axis: LineAxis,
-    index: u32,
-    pixels: f32,
+    lines: Lines,
+    sizes: &SheetSizes,
 ) -> Result<(), EngineError> {
-    match axis {
-        LineAxis::Row => wb.set_row_height(sheet, row_at(index), pixels),
-        LineAxis::Column => wb.set_column_width(sheet, column_at(index), pixels),
+    if lines.axis == LineAxis::Row {
+        return set_hidden(wb, sheet, lines, false);
     }
-}
-
-// The lines with an entry of their own among `first..=last`, and which of them are hidden.
-fn entries_between(sizes: &SheetSizes, axis: LineAxis, first: u32, last: u32) -> Vec<(u32, bool)> {
-    let within = |index: u32| (first..=last).contains(&index);
-    match axis {
-        LineAxis::Row => sizes
-            .rows
-            .iter()
-            .filter(|(row, _)| within(row.get()))
-            .map(|(row, height)| (row.get(), *height <= 0.0))
-            .collect(),
-        LineAxis::Column => {
-            let mut entries = Vec::new();
-            for span in &sizes.columns {
-                let start = u32::from(span.first.get()).max(first);
-                let end = u32::from(span.last.get()).min(last);
-                entries.extend((start..=end).map(|index| (index, span.width <= 0.0)));
-            }
-            entries
+    for span in sizes.columns.iter().filter(|span| span.width <= 0.0) {
+        let first = u32::from(span.first.get()).max(lines.first);
+        let last = u32::from(span.last.get()).min(lines.last);
+        if first <= last {
+            set_hidden(
+                wb,
+                sheet,
+                Lines {
+                    first,
+                    last,
+                    ..lines
+                },
+                false,
+            )?;
         }
     }
+    Ok(())
 }
 
 // One undo step, however many lines. A size above zero shows a hidden line at that size,
@@ -83,30 +67,35 @@ pub fn apply(
     wb.as_one_undo_step(|wb| match size {
         Size::Hidden => set_hidden(wb, sheet, lines, true),
         Size::Pixels(pixels) => {
-            let entries = entries_between(&wb.sizes(sheet), lines.axis, lines.first, lines.last);
-            for (index, hidden) in &entries {
-                if *hidden {
-                    let line = Lines {
-                        first: *index,
-                        last: *index,
-                        ..lines
-                    };
-                    set_hidden(wb, sheet, line, false)?;
+            let sizes = wb.sizes(sheet);
+            show_hidden(wb, sheet, lines, &sizes)?;
+            match (lines.axis, lines.is_all()) {
+                (LineAxis::Row, false) => {
+                    let heights: Vec<(RowIdx, f32)> = (lines.first..=lines.last)
+                        .map(|row| (row_at(row), pixels))
+                        .collect();
+                    wb.set_row_heights(sheet, &heights)
+                }
+                (LineAxis::Row, true) => {
+                    let heights: Vec<(RowIdx, f32)> =
+                        sizes.rows.iter().map(|(row, _)| (*row, pixels)).collect();
+                    wb.set_row_heights(sheet, &heights)?;
+                    wb.set_default_row_height(sheet, pixels)
+                }
+                (LineAxis::Column, false) => wb.set_column_widths(
+                    sheet,
+                    &[(column_at(lines.first), column_at(lines.last), pixels)],
+                ),
+                (LineAxis::Column, true) => {
+                    let runs: Vec<(ColIdx, ColIdx, f32)> = sizes
+                        .columns
+                        .iter()
+                        .map(|span| (span.first, span.last, pixels))
+                        .collect();
+                    wb.set_column_widths(sheet, &runs)?;
+                    wb.set_default_column_width(sheet, pixels)
                 }
             }
-            if lines.is_all() {
-                for (index, _) in &entries {
-                    set_size(wb, sheet, lines.axis, *index, pixels)?;
-                }
-                return match lines.axis {
-                    LineAxis::Row => wb.set_default_row_height(sheet, pixels),
-                    LineAxis::Column => wb.set_default_column_width(sheet, pixels),
-                };
-            }
-            for index in lines.first..=lines.last {
-                set_size(wb, sheet, lines.axis, index, pixels)?;
-            }
-            Ok(())
         }
     })
 }
@@ -117,7 +106,7 @@ mod tests {
     use zenkai_types::{ColIdx, LineAxis, MAX_COLS, MAX_ROWS, Range, RowIdx, SheetId};
 
     use super::apply;
-    use crate::line_size::{Lines, Size};
+    use crate::line_size::{Entry, Lines, Separator, Size, display_value, format_number, parse};
 
     const SHEET: SheetId = SheetId(0);
 
@@ -257,5 +246,65 @@ mod tests {
         assert_eq!(sizes.default_column_width, Some(145.0));
         assert!(sizes.rows.is_empty());
         assert!(sizes.columns.is_empty());
+    }
+
+    #[test]
+    fn a_selection_of_hundreds_of_thousands_of_rows_is_one_pass_and_one_undo_step() {
+        let mut book = Workbook::new_empty().unwrap();
+        let rows = lines(LineAxis::Row, 0, 299_999);
+        apply(&mut book, SHEET, rows, Size::Pixels(30.0)).unwrap();
+        assert_eq!(heights(&book).len(), 300_000);
+        apply(&mut book, SHEET, rows, Size::Hidden).unwrap();
+        assert!(heights(&book).iter().all(|(_, height)| *height == 0.0));
+        book.undo().unwrap();
+        book.undo().unwrap();
+        assert!(heights(&book).is_empty());
+    }
+
+    #[test]
+    fn every_column_width_the_dialog_can_show_is_the_pixels_the_engine_draws() {
+        let mut book = Workbook::new_empty().unwrap();
+        let column = ColIdx::clamped(2);
+        for pixels in 6..=1790_u16 {
+            let shown = display_value(LineAxis::Column, f32::from(pixels));
+            let text = format_number(shown, Separator::Dot);
+            let Ok(Entry::Size(Size::Pixels(typed))) =
+                parse(LineAxis::Column, &text, Separator::Dot)
+            else {
+                panic!("{pixels} px shown as {text} is not read back");
+            };
+            assert_eq!(typed, f32::from(pixels), "{text}");
+            book.set_column_width(SHEET, column, typed).unwrap();
+            let drawn = book
+                .sizes(SHEET)
+                .columns
+                .iter()
+                .map(|span| span.width)
+                .next();
+            assert_eq!(drawn, Some(typed), "{pixels}");
+        }
+    }
+
+    #[test]
+    fn every_row_height_the_dialog_can_show_is_the_pixels_the_engine_draws() {
+        let mut book = Workbook::new_empty().unwrap();
+        let row = RowIdx::clamped(2);
+        for pixels in 1..=546_u16 {
+            let shown = display_value(LineAxis::Row, f32::from(pixels));
+            let text = format_number(shown, Separator::Dot);
+            let Ok(Entry::Size(Size::Pixels(typed))) = parse(LineAxis::Row, &text, Separator::Dot)
+            else {
+                panic!("{pixels} px shown as {text} is not read back");
+            };
+            assert_eq!(typed, f32::from(pixels), "{text}");
+            book.set_row_height(SHEET, row, typed).unwrap();
+            let drawn = book
+                .sizes(SHEET)
+                .rows
+                .iter()
+                .map(|(_, height)| *height)
+                .next();
+            assert_eq!(drawn, Some(typed), "{pixels}");
+        }
     }
 }

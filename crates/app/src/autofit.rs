@@ -79,62 +79,57 @@ impl Measures {
 // cells or hidden stays as it is. Only the first MAX_AUTOFIT_CELLS cells of the range are
 // read.
 pub fn fit_columns(wb: &mut Workbook, sheet: SheetId, columns: Lines) -> Result<(), EngineError> {
-    let (first, last) = (columns.first, columns.last);
     let measures = Measures::of(&wb.sizes(sheet));
     let mut longest: BTreeMap<ColIdx, usize> = BTreeMap::new();
-    let in_range = wb
-        .filled_cells(sheet)
-        .into_iter()
-        .filter(|pos| (first..=last).contains(&u32::from(pos.col.get())))
-        .take(MAX_AUTOFIT_CELLS);
-    for pos in in_range {
+    for pos in wb.filled_cells_within(sheet, columns.range(), MAX_AUTOFIT_CELLS) {
         let characters = wb.cell(sheet, pos).text.chars().count();
         let entry = longest.entry(pos.col).or_insert(0);
         *entry = (*entry).max(characters);
     }
-    for (col, characters) in longest {
-        if measures.width(col) > 0.0 {
-            wb.set_column_width(sheet, col, column_width_of(characters))?;
-        }
-    }
-    Ok(())
+    let runs: Vec<(ColIdx, ColIdx, f32)> = longest
+        .into_iter()
+        .filter(|(col, _)| measures.width(*col) > 0.0)
+        .map(|(col, characters)| (col, col, column_width_of(characters)))
+        .collect();
+    wb.set_column_widths(sheet, &runs)
 }
 
 // Each row of the range gets the height of its tallest wrapped cell, or the sheet's own
-// row height when nothing wraps. A row with no cells or hidden stays as it is.
+// row height when nothing wraps. A row with no cells or hidden stays as it is, and a cell
+// in a hidden column does not count.
 pub fn fit_rows(wb: &mut Workbook, sheet: SheetId, rows: Lines) -> Result<(), EngineError> {
-    let (first, last) = (rows.first, rows.last);
     let measures = Measures::of(&wb.sizes(sheet));
     let mut tallest: BTreeMap<RowIdx, f32> = BTreeMap::new();
-    let in_range = wb
-        .filled_cells(sheet)
-        .into_iter()
-        .filter(|pos| (first..=last).contains(&pos.row.get()))
-        .take(MAX_AUTOFIT_CELLS);
-    for pos in in_range {
+    for pos in wb.filled_cells_within(sheet, rows.range(), MAX_AUTOFIT_CELLS) {
+        let width = measures.width(pos.col);
+        if width <= 0.0 {
+            continue;
+        }
         let view = wb.cell(sheet, pos);
         let lines = if view.style.wrap && view.kind == ValueKind::Text {
-            wrapped_lines(&view.text, measures.width(pos.col))
+            wrapped_lines(&view.text, width)
         } else {
             1.0
         };
         let entry = tallest.entry(pos.row).or_insert(1.0);
         *entry = entry.max(lines);
     }
-    for (row, lines) in tallest {
-        if measures.hidden_rows.contains(&row) {
-            continue;
-        }
-        let height = if lines > 1.0 {
-            height_of_lines(lines)
-        } else {
-            measures.default_height
-        };
-        if measures.row_entries.contains(&row) || height != measures.default_height {
-            wb.set_row_height(sheet, row, height)?;
-        }
-    }
-    Ok(())
+    let heights: Vec<(RowIdx, f32)> = tallest
+        .into_iter()
+        .filter(|(row, _)| !measures.hidden_rows.contains(row))
+        .map(|(row, lines)| {
+            let height = if lines > 1.0 {
+                height_of_lines(lines)
+            } else {
+                measures.default_height
+            };
+            (row, height)
+        })
+        .filter(|(row, height)| {
+            measures.row_entries.contains(row) || *height != measures.default_height
+        })
+        .collect();
+    wb.set_row_heights(sheet, &heights)
 }
 
 #[cfg(test)]
@@ -288,6 +283,16 @@ mod tests {
             heights(&book),
             [(0, height_of_lines(2.0).round()), (2, 0.0), (3, 80.0)]
         );
+    }
+
+    #[test]
+    fn a_cell_in_a_hidden_column_does_not_make_its_row_taller() {
+        let mut book = book_with(&[("A1", "one\ntwo\nthree"), ("B1", "x")]);
+        wrapped(&mut book, "A1");
+        let column = Range::parse_a1("A1:A1048576").unwrap();
+        book.set_columns_hidden(SHEET, column, true).unwrap();
+        fit_rows(&mut book, SHEET, lines(LineAxis::Row, 0, 0)).unwrap();
+        assert!(heights(&book).is_empty());
     }
 
     #[test]

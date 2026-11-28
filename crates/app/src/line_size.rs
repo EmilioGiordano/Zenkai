@@ -1,6 +1,6 @@
 use zenkai_types::{
-    ColIdx, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, Language, LineAxis, MAX_COLS, MAX_ROWS, Range,
-    SheetSizes,
+    CellPos, ColIdx, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, Language, LineAxis, MAX_COLS, MAX_ROWS,
+    Range, RowIdx, SheetSizes,
 };
 
 const POINTS_PER_PIXEL: f64 = 0.75;
@@ -163,6 +163,21 @@ impl Lines {
         Lines { axis, first, last }
     }
 
+    // The cells of the lines: whole rows or whole columns.
+    pub fn range(self) -> Range {
+        let (first, last) = (i64::from(self.first), i64::from(self.last));
+        match self.axis {
+            LineAxis::Row => Range::new(
+                CellPos::new(RowIdx::clamped(first), ColIdx::default()),
+                CellPos::new(RowIdx::clamped(last), ColIdx::LAST),
+            ),
+            LineAxis::Column => Range::new(
+                CellPos::new(RowIdx::default(), ColIdx::clamped(first)),
+                CellPos::new(RowIdx::LAST, ColIdx::clamped(last)),
+            ),
+        }
+    }
+
     pub fn count(self) -> u32 {
         self.last - self.first + 1
     }
@@ -204,8 +219,18 @@ struct Seen {
     covered: u64,
 }
 
+// A file can say anything: what is not a positive size is hidden.
+fn sane(pixels: f32) -> f32 {
+    if pixels.is_finite() && pixels > 0.0 {
+        pixels
+    } else {
+        0.0
+    }
+}
+
 impl Seen {
     fn add(&mut self, pixels: f32, lines: u64) {
+        let pixels = sane(pixels);
         self.covered += lines;
         match self.first {
             None => self.first = Some(pixels),
@@ -217,10 +242,12 @@ impl Seen {
 
 impl Prefill {
     pub fn of(lines: Lines, sizes: &SheetSizes) -> Prefill {
-        let default = match lines.axis {
-            LineAxis::Row => sizes.default_row_height.unwrap_or(DEFAULT_ROW_HEIGHT),
-            LineAxis::Column => sizes.default_column_width.unwrap_or(DEFAULT_COL_WIDTH),
+        let (own_default, standard) = match lines.axis {
+            LineAxis::Row => (sizes.default_row_height, DEFAULT_ROW_HEIGHT),
+            LineAxis::Column => (sizes.default_column_width, DEFAULT_COL_WIDTH),
         };
+        let default = own_default.map_or(standard, sane);
+        let default = if default > 0.0 { default } else { standard };
         let mut seen = Seen::default();
         match lines.axis {
             LineAxis::Row => {
@@ -253,7 +280,15 @@ impl Prefill {
 
     pub fn text(self, axis: LineAxis, separator: Separator) -> String {
         match self {
-            Prefill::Uniform(pixels) => format_number(display_value(axis, pixels), separator),
+            Prefill::Uniform(pixels) => {
+                // A visible line never shows as zero, nor as less than the smallest size.
+                let smallest = match axis {
+                    LineAxis::Row => MIN_ROW_PIXELS,
+                    LineAxis::Column => MIN_COLUMN_PIXELS,
+                };
+                let shown = pixels.max(smallest as f32);
+                format_number(display_value(axis, shown), separator)
+            }
             Prefill::Hidden => "0".to_string(),
             Prefill::Mixed => String::new(),
         }
@@ -343,7 +378,9 @@ mod tests {
         Entry, Lines, MAX_CHARACTERS, MAX_POINTS, OutOfRange, Outcome, Prefill, Refusal, Separator,
         Size, Slot, display_value, format_number, outcome, parse,
     };
-    use zenkai_types::{ColIdx, Language, LineAxis, MAX_COLS, MAX_ROWS, Range, SheetSizes};
+    use zenkai_types::{
+        ColIdx, DEFAULT_COL_WIDTH, Language, LineAxis, MAX_COLS, MAX_ROWS, Range, SheetSizes,
+    };
 
     const EN: Separator = Separator::Dot;
     const ES: Separator = Separator::Comma;
@@ -517,6 +554,44 @@ mod tests {
     }
 
     #[test]
+    fn a_column_narrower_than_the_smallest_size_prefills_the_smallest_positive_value() {
+        for width in [3.0, 5.0, 6.0] {
+            let sizes = SheetSizes {
+                columns: vec![span(1, 1, width)],
+                ..SheetSizes::default()
+            };
+            let prefill = Prefill::of(column_lines(1, 1), &sizes);
+            assert_eq!(prefill.text(LineAxis::Column, EN), "0.14", "{width}");
+        }
+        let thin = row_sizes(&[(3, 0.2)]);
+        assert_eq!(
+            Prefill::of(row_lines(3, 3), &thin).text(LineAxis::Row, EN),
+            "0.75"
+        );
+    }
+
+    #[test]
+    fn sizes_that_are_not_sizes_prefill_hidden_or_the_default() {
+        for bad in [f32::NAN, f32::INFINITY, -4.0, 0.0] {
+            let sizes = SheetSizes {
+                columns: vec![span(1, 1, bad)],
+                default_column_width: Some(bad),
+                ..SheetSizes::default()
+            };
+            assert_eq!(Prefill::of(column_lines(1, 1), &sizes), Prefill::Hidden);
+            assert_eq!(
+                Prefill::of(column_lines(2, 2), &sizes),
+                Prefill::Uniform(DEFAULT_COL_WIDTH)
+            );
+        }
+        let tiny = row_sizes(&[(3, 1.0e-30)]);
+        assert_eq!(
+            Prefill::of(row_lines(3, 3), &tiny).text(LineAxis::Row, EN),
+            "0.75"
+        );
+    }
+
+    #[test]
     fn different_sizes_prefill_nothing() {
         let sizes = row_sizes(&[(3, 40.0), (4, 25.0)]);
         assert_eq!(Prefill::of(row_lines(3, 4), &sizes), Prefill::Mixed);
@@ -580,6 +655,12 @@ mod tests {
         assert!(columns.is_all());
         assert_eq!(columns.count(), u32::from(MAX_COLS));
         assert!(!row_lines(0, MAX_ROWS - 2).is_all());
+    }
+
+    #[test]
+    fn the_lines_are_whole_rows_or_whole_columns() {
+        assert_eq!(row_lines(3, 5).range().to_string(), "A4:XFD6");
+        assert_eq!(column_lines(1, 3).range().to_string(), "B1:D1048576");
     }
 
     #[test]

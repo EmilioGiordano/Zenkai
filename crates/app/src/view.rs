@@ -17,8 +17,8 @@ use zenkai_formats::{Delimiter, apply, guess, parse_csv};
 use zenkai_grid::{CycleReference, Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_i18n::t;
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, LineAxis, NumberFormat, Range, Rgb,
-    SheetId, StyleChange, WorkbookId,
+    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, LineAxis, LineSize, NumberFormat,
+    Range, Rgb, RowIdx, SheetId, StyleChange, WorkbookId,
 };
 
 mod agent_access;
@@ -4967,8 +4967,6 @@ fn enter_text(
 // instead, and text keeps overflowing.
 // Each default-width column of `range` grows to its widest formatted number, once.
 fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-    let sizes = wb.sizes(sheet);
-    let mut needed: std::collections::BTreeMap<ColIdx, f32> = Default::default();
     // Small ranges are read cell by cell, and so is the used part of a large one when it
     // is small; otherwise only where the sheet has content.
     let cells: Vec<CellPos> = if range.cell_count() <= MAX_AUTOFIT_CELLS as u64 {
@@ -4980,36 +4978,30 @@ fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
                 .positions()
                 .filter(|pos| !wb.input(sheet, *pos).is_empty())
                 .collect(),
-            Some(_) => wb
-                .filled_cells(sheet)
-                .into_iter()
-                .filter(|pos| range.contains(*pos))
-                .take(MAX_AUTOFIT_CELLS)
-                .collect(),
+            Some(_) => wb.filled_cells_within(sheet, range, MAX_AUTOFIT_CELLS),
         }
     };
+    // Only the columns the cells are in are measured, once each.
+    let mut columns: std::collections::HashMap<ColIdx, LineSize> = Default::default();
+    let mut needed: std::collections::BTreeMap<ColIdx, f32> = Default::default();
     for pos in cells {
-        let custom = sizes
-            .columns
-            .iter()
-            .any(|span| span.first <= pos.col && pos.col <= span.last);
+        let size = *columns
+            .entry(pos.col)
+            .or_insert_with(|| wb.column_size(sheet, pos.col));
         let view = wb.cell(sheet, pos);
-        if custom || view.number.is_none() || view.style.num_fmt == "general" {
+        if size.own || view.number.is_none() || view.style.num_fmt == "general" {
             continue;
         }
         let width = view.text.chars().count() as f32 * AUTOFIT_CHAR_WIDTH + 12.0;
         let entry = needed.entry(pos.col).or_insert(0.0);
         *entry = entry.max(width);
     }
-    let default_width = sizes
-        .default_column_width
-        .unwrap_or(zenkai_types::DEFAULT_COL_WIDTH);
-    for (col, width) in needed {
-        if width > default_width {
-            wb.set_column_width(sheet, col, width)?;
-        }
-    }
-    Ok(())
+    let widened: Vec<(ColIdx, ColIdx, f32)> = needed
+        .into_iter()
+        .filter(|(col, width)| *width > columns[col].pixels)
+        .map(|(col, width)| (col, col, width))
+        .collect();
+    wb.set_column_widths(sheet, &widened)
 }
 
 // Excel grows default-height rows to show every wrapped line; the line count is
@@ -5019,42 +5011,36 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
     if range.cell_count() > MAX_AUTOFIT_CELLS as u64 {
         return Ok(());
     }
-    let sizes = wb.sizes(sheet);
-    let custom_rows: std::collections::HashSet<zenkai_types::RowIdx> =
-        sizes.rows.iter().map(|(row, _)| *row).collect();
-    let width = |col: ColIdx| {
-        sizes
-            .columns
-            .iter()
-            .find(|span| span.first <= col && col <= span.last)
-            .map_or(
-                sizes
-                    .default_column_width
-                    .unwrap_or(zenkai_types::DEFAULT_COL_WIDTH),
-                |span| span.width,
-            )
-    };
+    // Only the rows and columns the cells are in are measured, once each.
+    let mut own_rows: std::collections::HashMap<RowIdx, bool> = Default::default();
+    let mut widths: std::collections::HashMap<ColIdx, f32> = Default::default();
     // The tallest wrapped cell sets each row, once.
-    let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
-        Default::default();
+    let mut lines_per_row: std::collections::BTreeMap<RowIdx, f32> = Default::default();
     for pos in range.positions() {
-        if wb.input(sheet, pos).is_empty() || custom_rows.contains(&pos.row) {
+        if wb.input(sheet, pos).is_empty()
+            || *own_rows
+                .entry(pos.row)
+                .or_insert_with(|| wb.row_size(sheet, pos.row).own)
+        {
             continue;
         }
         let view = wb.cell(sheet, pos);
         if view.kind != zenkai_types::ValueKind::Text {
             continue;
         }
-        let lines = wrapped_lines(&view.text, width(pos.col));
+        let width = *widths
+            .entry(pos.col)
+            .or_insert_with(|| wb.column_size(sheet, pos.col).pixels);
+        let lines = wrapped_lines(&view.text, width);
         let entry = lines_per_row.entry(pos.row).or_insert(1.0);
         *entry = entry.max(lines);
     }
-    for (row, lines) in lines_per_row {
-        if lines > 1.0 {
-            wb.set_row_height(sheet, row, height_of_lines(lines))?;
-        }
-    }
-    Ok(())
+    let grown: Vec<(RowIdx, f32)> = lines_per_row
+        .into_iter()
+        .filter(|(_, lines)| *lines > 1.0)
+        .map(|(row, lines)| (row, height_of_lines(lines)))
+        .collect();
+    wb.set_row_heights(sheet, &grown)
 }
 
 #[cfg(test)]
