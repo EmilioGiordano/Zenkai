@@ -689,6 +689,41 @@ mod tests {
     }
 
     #[test]
+    fn attributes_run_together_are_left_to_ironcalc_as_roxmltree_refuses_them() {
+        for (rows, separated) in [
+            (r#"<row r="1048576"aspans="1:1"/>"#, false),
+            (r#"<row r="1"><c r="A1"t="s"><v>0</v></c></row>"#, false),
+            (
+                r#"<row r="1"><c r="A1" s='1't="n"><v>0</v></c></row>"#,
+                false,
+            ),
+            (
+                r#"<row r="1"><c r="A1"><f t="shared"ref="A1" si="0">1</f></c></row>"#,
+                false,
+            ),
+            (
+                r#"<row r="1"><c r="A1"><v x="1"y="2">1</v></c></row>"#,
+                false,
+            ),
+            ("<row r=\"1\"\tx='a=\"1\"b'\r\n spans = \"1:1\" />", true),
+            (r#"<row r="1"><c r="A1" t="n"><v>0</v></c></row>"#, true),
+        ] {
+            let document = format!("<sheetData>{rows}</sheetData>");
+            assert_eq!(
+                roxmltree::Document::parse(&document).is_ok(),
+                separated,
+                "{rows}"
+            );
+            let scanned = scan(rows);
+            if separated {
+                assert!(scanned.is_ok(), "{rows}");
+            } else {
+                assert!(matches!(scanned, Err(ReadError::Unreadable(_))), "{rows}");
+            }
+        }
+    }
+
+    #[test]
     fn cell_references_outside_the_sheet_are_left_to_ironcalc() {
         for rows in [
             r#"<row r="1"><c r="A1048577"><v>1</v></c></row>"#,

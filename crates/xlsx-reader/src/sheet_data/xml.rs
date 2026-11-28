@@ -34,6 +34,9 @@ impl<'a> Scanner<'a, '_> {
         names: [&[u8]; N],
     ) -> Result<[Option<Cow<'e, str>>; N], ReadError> {
         self.check_name(start.name())?;
+        if attributes_run_together(start.attributes_raw()) {
+            return Err(unreadable("an attribute not preceded by white space"));
+        }
         let mut found: [Option<Cow<'e, str>>; N] = std::array::from_fn(|_| None);
         for attribute in start.attributes().with_checks(true) {
             let attribute = attribute.map_err(unreadable)?;
@@ -271,6 +274,30 @@ impl<'a> Scanner<'a, '_> {
             }
         }
     }
+}
+
+// quick-xml reads `r="1"s="2"` as two attributes; roxmltree, as XML requires, refuses an
+// attribute that does not follow white space, so IronCalc refuses the whole file.
+fn attributes_run_together(raw: &[u8]) -> bool {
+    let mut quote = None;
+    let mut value_ended = false;
+    for &byte in raw {
+        match quote {
+            Some(open) if byte == open => {
+                quote = None;
+                value_ended = true;
+            }
+            Some(_) => {}
+            None if value_ended && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') => return true,
+            None => {
+                value_ended = false;
+                if matches!(byte, b'"' | b'\'') {
+                    quote = Some(byte);
+                }
+            }
+        }
+    }
+    false
 }
 
 fn is_xml_char(c: char) -> bool {
