@@ -301,18 +301,41 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
 }
 
 // IronCalc writes the sheet's <autoFilter> before its other elements. Its texts are
-// escaped and a rule it keeps never holds another <autoFilter>, so the first end tag
-// closes it.
+// escaped, so every `<` in it starts a tag; a rule it keeps may hold another <autoFilter>,
+// so the filter ends where its tags balance.
 fn filter_length(elements: &str) -> usize {
-    const END: &str = "</autoFilter>";
-    if !elements.starts_with("<autoFilter") {
+    const OPEN: &[u8] = b"<autoFilter";
+    const END: &[u8] = b"</autoFilter>";
+    let bytes = elements.as_bytes();
+    if !bytes.starts_with(OPEN) {
         return 0;
     }
-    let open_end = elements.find('>').map_or(elements.len(), |at| at + 1);
-    if elements[..open_end].ends_with("/>") {
-        return open_end;
+    let mut depth = 0usize;
+    let mut at = 0;
+    while let Some(found) = bytes[at..].iter().position(|b| *b == b'<') {
+        let tag = at + found;
+        let tag_end = bytes[tag..]
+            .iter()
+            .position(|b| *b == b'>')
+            .map_or(bytes.len(), |end| tag + end + 1);
+        let written = &bytes[tag..tag_end];
+        if written.starts_with(END) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return tag_end;
+            }
+        } else if written.starts_with(OPEN)
+            && matches!(written.get(OPEN.len()), Some(b' ' | b'>' | b'/'))
+        {
+            if !written.ends_with(b"/>") {
+                depth += 1;
+            } else if depth == 0 {
+                return tag_end;
+            }
+        }
+        at = tag_end;
     }
-    elements.find(END).map_or(open_end, |at| at + END.len())
+    bytes.len()
 }
 
 // `tail` starts with </sheetData>; IronCalc writes <autoFilter>, <mergeCells>,
@@ -511,7 +534,11 @@ mod tests {
     fn the_filter_ironcalc_writes_ends_at_its_first_end_tag() {
         let closed = r#"<autoFilter ref="A1:B2"/>"#;
         let full = r#"<autoFilter ref="A1:B2"><filterColumn colId="0"/></autoFilter>"#;
-        for filter in [closed, full] {
+        let nested = concat!(
+            r#"<autoFilter ref="A1:B2"><filterColumn colId="0"><top10><autoFilter/>"#,
+            r#"<autoFilter xmlns="urn:x"><x/></autoFilter></top10></filterColumn></autoFilter>"#
+        );
+        for filter in [closed, full, nested] {
             assert_eq!(
                 super::filter_length(&format!("{filter}<mergeCells/>")),
                 filter.len()
