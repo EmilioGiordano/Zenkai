@@ -115,11 +115,6 @@ pub(crate) fn top_of(swatch: Swatch) -> f32 {
     }
 }
 
-// The height of everything that scrolls.
-pub(crate) fn content_height() -> f32 {
-    top_of(Swatch::Standard { col: 0 }) + SWATCH_SIZE + REGION_PADDING
-}
-
 // The offset that shows `top..bottom` with the ring around it, moving as little as it can.
 pub(crate) fn scrolled_to(offset: f32, view: f32, top: f32, bottom: f32) -> f32 {
     let (top, bottom) = (top - REGION_PADDING, bottom + REGION_PADDING);
@@ -221,8 +216,8 @@ impl TabColorCard {
 #[cfg(test)]
 mod tests {
     use super::{
-        COLUMNS, Focus, LABEL_GAP, LABEL_HEIGHT, Move, REGION_PADDING, SWATCH_SIZE, content_height,
-        moved, scrolled_to, top_of,
+        COLUMNS, Focus, LABEL_GAP, LABEL_HEIGHT, Move, REGION_PADDING, SWATCH_SIZE, moved,
+        scrolled_to, top_of,
     };
     use crate::tab_colors::Swatch;
 
@@ -308,6 +303,5 @@ mod tests {
             standard,
             top_of(theme(5, 0)) + SWATCH_SIZE + 12.0 + LABEL_HEIGHT + LABEL_GAP
         );
-        assert_eq!(content_height(), standard + SWATCH_SIZE + REGION_PADDING);
     }
 }
