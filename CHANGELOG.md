@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Spreadsheet
+
+- The CSV preview lets each column be set to Text, and sets by itself the columns with values that start with 0 or have more than 15 digits, such as `00123` and long IDs, so they open and save exactly as written. Keep everything as text opens every column that way
+  ([#333](https://github.com/EmilioGiordano/Zenkai/issues/333)).
+
 ## [0.1.2]
 
 ### Spreadsheet
