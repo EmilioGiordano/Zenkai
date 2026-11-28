@@ -18,6 +18,7 @@ use crate::entry::{CsvLoad, Entry, FileSeen, Link, LinkStatus};
 use crate::failure::open_failure;
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
+use crate::sheet_tabs;
 use crate::text_document::DocumentKind;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -264,6 +265,13 @@ impl Workspace {
         let id = self.documents.open(workbook, path, unsupported);
         self.refuse_orphaned_agent_change(window, cx);
         self.present_active(window, cx);
+        if self
+            .documents
+            .get(id)
+            .is_some_and(|document| sheet_tabs::nothing_visible(&document.sheets))
+        {
+            self.notify(Severity::Info, t!("notice.all_sheets_hidden"), cx);
+        }
         id
     }
 
@@ -352,6 +360,8 @@ impl Workspace {
         self.clipboard_source = None;
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         self.format_dialog = None;
+        self.tab_color = None;
+        self.unhide = None;
         self.chart = None;
         self.rename = None;
         self.go_to = None;

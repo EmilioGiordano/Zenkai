@@ -38,11 +38,14 @@ mod notices;
 mod pdfs;
 mod save_flow;
 mod settings_gate;
+mod sheet_commands;
 mod space_panel;
+mod tab_color;
 mod text_actions;
 mod text_save;
 mod text_watch;
 mod texts;
+mod unhide;
 #[cfg(windows)]
 mod update_cards;
 mod updates;
@@ -89,14 +92,18 @@ use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::{SaveOrder, Session};
+use crate::sheet_tabs;
 use crate::sidebar_item::human_size;
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stale_view::StaleRequest;
 use crate::start_view;
 use crate::stats::{self, SelectionStats, StatsJob};
+use crate::tab_color_card::TabColorCard;
+use crate::tab_colors;
 use crate::theme;
 use crate::toolbar;
+use crate::unhide_dialog::UnhideDialog;
 use crate::visible_cells::{CopyScope, CopyShape, VisibleMark};
 use zenkai_agent::status_summary::{StatusSummary, SummaryItem};
 
@@ -221,6 +228,8 @@ pub struct Workspace {
     recent: Vec<PathBuf>,
     recent_saves: Arc<AtomicU64>,
     format_dialog: Option<FormatDialog>,
+    tab_color: Option<TabColorCard>,
+    unhide: Option<UnhideDialog>,
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
@@ -450,6 +459,8 @@ impl Workspace {
             recent: Vec::new(),
             recent_saves: Arc::new(AtomicU64::new(0)),
             format_dialog: None,
+            tab_color: None,
+            unhide: None,
             generate: None,
             colors,
             focus: cx.focus_handle(),
@@ -1419,6 +1430,7 @@ impl Workspace {
                     && errors.is_empty()
                 {
                     document.sheet = target;
+                    document.keep_sheet_shown();
                 }
                 let sheet_changed =
                     document.sheet != sheet_before || document.sheets.len() != sheets_before;
@@ -2869,6 +2881,8 @@ impl Workspace {
             return;
         }
         document.sheet = sheet;
+        self.tab_color = None;
+        self.unhide = None;
         self.reset_grid(window, cx);
     }
 
@@ -3038,21 +3052,54 @@ impl Workspace {
         let entity = cx.entity().downgrade();
         let active = self.documents.active();
         let sheets = active.map_or(&[][..], |document| document.sheets.as_slice());
-        let tabs = sheets.iter().map(|sheet| {
-            let entity = entity.clone();
-            let id = sheet.id;
-            // Excel activates a tab on right click, so its menu acts on that sheet.
-            Tab::new().label(sheet.name.clone()).on_mouse_down(
-                MouseButton::Right,
-                move |_, window, cx| {
-                    if let Err(error) =
-                        entity.update(cx, |this, cx| this.switch_sheet(id, window, cx))
-                    {
-                        tracing::debug!(%error, "workspace dropped");
-                    }
-                },
-            )
-        });
+        let strip = sheet_tabs::shown(sheets);
+        let strip_for_click = strip.clone();
+        let (can_hide, can_unhide) = (
+            sheet_tabs::can_hide(sheets),
+            !sheet_tabs::hidden(sheets).is_empty(),
+        );
+        let bar_edge = theme.muted_foreground;
+        let tabs = strip
+            .iter()
+            .filter_map(|id| sheets.iter().find(|sheet| sheet.id == *id))
+            .map(|sheet| {
+                let entity = entity.clone();
+                let id = sheet.id;
+                let hidden_mark = sheet_tabs::is_shown_hidden(sheets, id);
+                let name = if hidden_mark {
+                    format!("{} {}", sheet.name, t!("sheet.hidden_mark"))
+                } else {
+                    sheet.name.clone()
+                };
+                let described = match sheet.color {
+                    Some(color) => t!(
+                        "sheet.tab_color_aria",
+                        name = name,
+                        color = tab_colors::Swatch::of(color)
+                            .map_or_else(|| tab_colors::hex(color), tab_colors::Swatch::name)
+                    ),
+                    None => name.clone(),
+                };
+                // Excel activates a tab on right click, so its menu acts on that sheet.
+                let tab = Tab::new()
+                    .label(sheet.name.clone())
+                    .aria_label(described)
+                    .on_mouse_down(MouseButton::Right, move |_, window, cx| {
+                        if let Err(error) =
+                            entity.update(cx, |this, cx| this.switch_sheet(id, window, cx))
+                        {
+                            tracing::debug!(%error, "workspace dropped");
+                        }
+                    })
+                    .when(hidden_mark, |tab| {
+                        tab.italic()
+                            .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
+                    });
+                match sheet.color {
+                    Some(color) => tab.child(color_bar(color, bar_edge)),
+                    None => tab,
+                }
+            });
         h_flex()
             .h(rem_px(32.0))
             .items_center()
@@ -3065,9 +3112,17 @@ impl Workspace {
                     .child(
                         TabBar::new("sheets")
                             .children(tabs)
-                            .selected_index(active.map_or(0, |document| document.sheet.0 as usize))
+                            .selected_index(
+                                active
+                                    .and_then(|document| {
+                                        strip.iter().position(|id| *id == document.sheet)
+                                    })
+                                    .unwrap_or(0),
+                            )
                             .on_click(move |index, window, cx| {
-                                let sheet = SheetId(u32::try_from(*index).unwrap_or(0));
+                                let Some(sheet) = strip_for_click.get(*index).copied() else {
+                                    return;
+                                };
                                 if let Err(error) = entity.update(cx, |this, cx| {
                                     // A second click on the active tab within the double-click time renames it.
                                     let now = Instant::now();
@@ -3088,7 +3143,7 @@ impl Workspace {
                     )
                     .context_menu({
                         let grid_focus = self.grid.focus_handle(cx);
-                        move |menu, _, _| sheet_menu(menu, grid_focus.clone())
+                        move |menu, _, _| sheet_menu(menu, grid_focus.clone(), can_hide, can_unhide)
                     }),
             )
             .child(
@@ -3766,6 +3821,10 @@ impl Workspace {
             self.notify(Severity::Warning, t!("notice.last_sheet"), cx);
             return;
         }
+        if self.deleting_last_visible_sheet() {
+            self.notify(Severity::Warning, t!("notice.last_visible_sheet"), cx);
+            return;
+        }
         let Some(sheet) = self.active_sheet() else {
             return;
         };
@@ -3811,13 +3870,7 @@ impl Workspace {
         let Some(document) = self.documents.active() else {
             return;
         };
-        let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
-        let target = if left {
-            sheet.0.checked_sub(1)
-        } else {
-            (sheet.0 < last).then_some(sheet.0 + 1)
-        };
-        let Some(target) = target else {
+        let Some(target) = sheet_tabs::move_target(&document.sheets, sheet, left) else {
             return;
         };
         if self.edit(window, cx, move |wb| wb.move_sheet(sheet, target))
@@ -4210,6 +4263,8 @@ impl Render for Workspace {
         let theme = cx.theme();
         root.relative()
             .map(|root| pdfs::pdf_actions(root, cx))
+            .map(|root| Self::with_tab_color_actions(root, cx))
+            .map(|root| Self::with_unhide_actions(root, cx))
             .key_context({
                 let mut context = KeyContext::default();
                 context.add("Workspace");
@@ -4269,7 +4324,11 @@ impl Render for Workspace {
                 this.reopen_closed(window, cx)
             }))
             .on_action(cx.listener(|this, _: &Undo, window, cx| {
-                this.edit(window, cx, |wb| wb.undo());
+                if this.edit(window, cx, |wb| wb.undo())
+                    && let Some(document) = this.documents.active_mut()
+                {
+                    document.expect_undo();
+                }
             }))
             .on_action(cx.listener(|this, _: &Redo, window, cx| {
                 this.edit(window, cx, |wb| wb.redo());
@@ -4539,16 +4598,21 @@ impl Render for Workspace {
                     this.forward_to_notes(cx, |view, cx| view.zoom_reset(cx));
                 }
             }))
-            .on_action(cx.listener(|this, _: &NextSheet, window, cx| {
-                if let Some(sheet) = this.active_sheet() {
-                    this.switch_sheet(SheetId(sheet.0 + 1), window, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, _: &PreviousSheet, window, cx| {
-                if let Some(sheet) = this.active_sheet() {
-                    this.switch_sheet(SheetId(sheet.0.saturating_sub(1)), window, cx);
-                }
-            }))
+            .on_action(
+                cx.listener(|this, _: &NextSheet, window, cx| this.step_sheet(true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &PreviousSheet, window, cx| {
+                    this.step_sheet(false, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &TabColor, window, cx| this.open_tab_color(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &HideSheet, window, cx| this.hide_sheet(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &UnhideSheet, window, cx| this.open_unhide(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NewSheet, window, cx| this.add_sheet(window, cx)))
             .on_action(cx.listener(|this, _: &InsertChart, _, cx| this.insert_chart(cx)))
             .on_action(cx.listener(|this, _: &Replace, window, cx| this.open_replace(window, cx)))
@@ -4860,6 +4924,8 @@ impl Render for Workspace {
             .children(self.render_messages(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_tab_color(window, cx))
+            .children(self.render_unhide(window, cx))
             .children(self.render_close_dialog(cx))
             .children(self.render_generate())
             .children(self.render_space_panel(window, cx))
@@ -4934,7 +5000,12 @@ fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
 }
 
 // Excel's sheet tab menu; it acts on the active sheet.
-fn sheet_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
+fn sheet_menu(
+    menu: PopupMenu,
+    grid_focus: FocusHandle,
+    can_hide: bool,
+    can_unhide: bool,
+) -> PopupMenu {
     menu.action_context(grid_focus)
         .menu(t!("menu.insert_sheet"), Box::new(NewSheet))
         .menu(t!("menu.rename"), Box::new(RenameSheet))
@@ -4943,6 +5014,25 @@ fn sheet_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .separator()
         .menu(t!("menu.move_left"), Box::new(MoveSheetLeft))
         .menu(t!("menu.move_right"), Box::new(MoveSheetRight))
+        .separator()
+        .menu(t!("menu.tab_color"), Box::new(TabColor))
+        .separator()
+        .menu_with_disabled(t!("menu.hide"), Box::new(HideSheet), !can_hide)
+        .menu_with_disabled(t!("menu.unhide"), Box::new(UnhideSheet), !can_unhide)
+}
+
+// A 4px bar along the bottom edge of the tab under a 1px line, so a color equal to the
+// tab's own background still shows. The label never sits on the color.
+fn color_bar(color: Rgb, edge: Hsla) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .h(px(5.0))
+        .bg(Hsla::from(rgb(color.0)))
+        .border_t_1()
+        .border_color(edge)
 }
 
 fn rgb_of(color: Hsla) -> Rgb {

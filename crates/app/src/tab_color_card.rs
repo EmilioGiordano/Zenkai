@@ -20,6 +20,13 @@ pub(crate) enum Focus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Caption {
+    Swatch(Swatch),
+    Outside(Rgb),
+    Blank,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Move {
     Left,
     Right,
@@ -134,6 +141,8 @@ pub(crate) struct TabColorCard {
     pub(crate) focus: Focus,
     pub(crate) back: Swatch,
     pub(crate) hovered: Option<Swatch>,
+    // Whether the arrows moved focus yet, which decides what the caption names.
+    pub(crate) moved: bool,
     pub(crate) card_focus: FocusHandle,
     pub(crate) swatch_focus: Vec<FocusHandle>,
     pub(crate) none_focus: FocusHandle,
@@ -157,6 +166,7 @@ impl TabColorCard {
             focus: Focus::Swatch(start),
             back: start,
             hovered: None,
+            moved: false,
             card_focus,
             swatch_focus,
             none_focus,
@@ -179,11 +189,21 @@ impl TabColorCard {
         self.file_color.filter(|color| Swatch::of(*color).is_none())
     }
 
-    pub(crate) fn caption_swatch(&self) -> Option<Swatch> {
-        self.hovered.or(match self.focus {
-            Focus::Swatch(swatch) => Some(swatch),
-            Focus::NoColor => None,
-        })
+    // The hovered swatch, else a color the palette lacks until the arrows move, else the
+    // swatch with focus.
+    pub(crate) fn caption(&self) -> Caption {
+        if let Some(swatch) = self.hovered {
+            return Caption::Swatch(swatch);
+        }
+        if !self.moved
+            && let Some(color) = self.outside_palette()
+        {
+            return Caption::Outside(color);
+        }
+        match self.focus {
+            Focus::Swatch(swatch) => Caption::Swatch(swatch),
+            Focus::NoColor => Caption::Blank,
+        }
     }
 
     pub(crate) fn handle_of(&self, swatch: Swatch) -> Option<&FocusHandle> {

@@ -157,6 +157,8 @@ impl Workspace {
             && !self.typing_in_a_field(cx)
             && !self.prompts.blocks_input()
             && self.format_dialog.is_none()
+            && self.tab_color.is_none()
+            && self.unhide.is_none()
             && self.chart.is_none();
         let wanted = self.documents.wanted();
         let awaiting_approval = self.awaiting_approval();
