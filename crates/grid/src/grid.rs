@@ -267,6 +267,10 @@ impl Grid {
         self.selection
     }
 
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
     pub fn editor(&self) -> Option<&Editor> {
         self.editor.as_ref()
     }
