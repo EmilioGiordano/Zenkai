@@ -541,6 +541,15 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   of `ironcalc` uses it (`src/expressions/parser/stringify.rs`). Stands on its own. Test:
   `array_formulas_keep_every_intersection` in
   `src/expressions/parser/tests/test_implicit_intersection_export.rs`.
+- Moving string cells (inserting or deleting rows or columns, `move_columns_action`,
+  `move_rows_action`) keeps them strings, and `extend_to` gives a string cell with the quote
+  prefix style as `'text`, so sorting, filling and the fill handle keep it a string too. They
+  read the text back through `set_user_input`, so a text cell holding `00123` became the
+  number 123 and one holding `=1+1` became a formula (`src/actions.rs`, `move_cell`,
+  `move_column_unchecked`, `move_row_unchecked`; `src/model.rs`, `extend_to`). Stands on its
+  own. Tests: `test_moving_a_text_cell_keeps_it_text`,
+  `test_moving_columns_and_rows_keeps_text_cells_text` and
+  `test_extending_a_text_cell_gives_text_to_type_again` in `src/test/test_actions.rs`.
 
 Zenkai-only, not for upstream:
 

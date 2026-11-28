@@ -13,7 +13,6 @@ use gpui_kit::*;
 
 use zenkai_agent::settings::SettingsError;
 use zenkai_engine::{Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
-use zenkai_formats::{Delimiter, apply, guess, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
 };
@@ -51,7 +50,6 @@ mod whats_new;
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
 use chat_dock::ChatDock;
-use zenkai_agent::protected_view::file_origin;
 use zenkai_agent::settings::{HeldChange, PermissionMode};
 
 use crate::actions::*;
@@ -64,8 +62,7 @@ use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_export_size::ExportSize;
 use crate::csv_io;
-use crate::csv_options::CsvOptions;
-use crate::csv_preview::{self, CsvPreview};
+use crate::csv_preview::Format as ColumnFormat;
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
@@ -101,6 +98,7 @@ use crate::visible_cells::{CopyScope, CopyShape, VisibleMark};
 use zenkai_agent::status_summary::{StatusSummary, SummaryItem};
 
 mod budget;
+mod csv_import;
 mod generate;
 mod lifecycle;
 mod main_window;
@@ -210,7 +208,7 @@ pub struct Workspace {
     palette: Option<Entity<CommandState>>,
     search: Option<SearchOverlay>,
     theme_picker: Option<ThemePicker>,
-    csv_preview: Option<CsvPreview>,
+    csv_preview: Option<csv_import::CsvSession>,
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
@@ -714,7 +712,9 @@ impl Workspace {
 
     fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
-        let focus = self.grid.focus_handle(cx);
+        let focus = self
+            .csv_preview_focus(cx)
+            .unwrap_or_else(|| self.grid.focus_handle(cx));
         window.focus(&focus, cx);
         cx.notify();
     }
@@ -1502,180 +1502,6 @@ impl Workspace {
         }
     }
 
-    fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let read = self
-            .open_loads
-            .start(t!("busy.reading", name = file_label(&path)));
-        cx.notify();
-        let request = self.next_csv_request();
-        cx.spawn_in(window, async move |this, cx| {
-            let task_path = path.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    csv_io::read_csv(&task_path).map(|read| {
-                        let guess = guess(&read.parsed);
-                        (read, guess)
-                    })
-                })
-                .await;
-            let update = this.update_in(cx, |this, window, cx| {
-                this.open_loads.finish(read);
-                cx.notify();
-                if this.csv_request != request {
-                    return;
-                }
-                match result {
-                    Ok((read, guess)) => {
-                        this.csv_preview = Some(CsvPreview::new(
-                            path,
-                            Arc::new(read.bytes),
-                            read.parsed,
-                            guess,
-                            read.seen,
-                        ));
-                        window.focus(&this.focus, cx);
-                        cx.notify();
-                    }
-                    Err(error) => this.notify(Severity::Error, error, cx),
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed while reading a CSV");
-            }
-        })
-        .detach();
-    }
-
-    fn reparse_csv(&mut self, delimiter: Delimiter, cx: &mut Context<Self>) {
-        let Some(preview) = &self.csv_preview else {
-            return;
-        };
-        let bytes = preview.bytes.clone();
-        let request = self.next_csv_request();
-        cx.spawn(async move |this, cx| {
-            let parsed = cx
-                .background_executor()
-                .spawn(async move {
-                    parse_csv(&bytes, Some(delimiter)).map(|parsed| {
-                        let guess = guess(&parsed);
-                        (parsed, guess)
-                    })
-                })
-                .await;
-            let update = this.update(cx, |this, cx| match parsed {
-                _ if this.csv_request != request => {}
-                Ok((parsed, guess)) => {
-                    if let Some(preview) = &mut this.csv_preview {
-                        preview.guess = guess;
-                        preview.parsed = parsed;
-                        preview.rebuild();
-                    }
-                    cx.notify();
-                }
-                Err(error) => this.notify(Severity::Error, error.to_string(), cx),
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed while parsing a CSV");
-            }
-        })
-        .detach();
-    }
-
-    fn confirm_csv_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(preview) = self.csv_preview.take() else {
-            return;
-        };
-        let request = self.next_csv_request();
-        let name = preview
-            .path
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let delimiter = crate::csv_preview::delimiter_label(preview.parsed.delimiter);
-        let encoding = preview.parsed.encoding.label();
-        let summary = t!(
-            "csv.imported",
-            name = name,
-            delimiter = delimiter,
-            encoding = encoding
-        );
-        let untitled_summary = t!(
-            "csv.imported_untitled",
-            name = name,
-            delimiter = delimiter,
-            encoding = encoding
-        );
-        self.busy = Some(t!("busy.importing").into());
-        cx.notify();
-        let CsvPreview {
-            path,
-            bytes,
-            parsed,
-            guess,
-            seen,
-            ..
-        } = preview;
-        let options = CsvOptions::from_read(&parsed, &guess);
-        let mut rows = parsed.rows;
-        let origin_path = path.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let task_bytes = bytes.clone();
-            let (result, origin) = cx
-                .background_executor()
-                .spawn(async move {
-                    let origin = file_origin(&origin_path);
-                    apply(options.decimal_mark, options.date_order, &mut rows);
-                    // On failure, parse again so the preview comes back as it was.
-                    let result = csv_io::workbook_from_rows(rows).map_err(|error| {
-                        (error, parse_csv(&task_bytes, Some(options.delimiter)).ok())
-                    });
-                    (result, origin)
-                })
-                .await;
-            let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(t!("busy.importing"), cx);
-                match result {
-                    Ok(_) if this.csv_request != request => {}
-                    Ok(workbook) if files::opens_as_itself(&path) => {
-                        this.remember_recent(&path, cx);
-                        if let Some(open) = this.documents.find_by_path(&path) {
-                            this.switch_to(open, window, cx);
-                            return;
-                        }
-                        let id = this.open_document(workbook, Some(path), Vec::new(), window, cx);
-                        if let Some(document) = this.documents.get_mut(id) {
-                            document.origin = origin;
-                            document.bind_csv(options);
-                            document.guard_file(seen);
-                        }
-                        this.notify(Severity::Info, summary, cx);
-                    }
-                    Ok(workbook) => {
-                        let id = this.open_document(workbook, None, Vec::new(), window, cx);
-                        if let Some(document) = this.documents.get_mut(id) {
-                            document.origin = origin;
-                        }
-                        this.notify(Severity::Info, untitled_summary, cx);
-                    }
-                    Err((error, parsed)) => {
-                        if let Some(parsed) = parsed
-                            && this.csv_request == request
-                        {
-                            this.csv_preview =
-                                Some(CsvPreview::new(path, bytes, parsed, guess, seen));
-                            window.focus(&this.focus, cx);
-                        }
-                        this.notify(Severity::Error, error, cx);
-                    }
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during import");
-            }
-        })
-        .detach();
-    }
-
     fn announce_interface_size(&mut self, cx: &mut Context<Self>) {
         self.notify(
             Severity::Info,
@@ -1685,48 +1511,6 @@ impl Workspace {
             ),
             cx,
         );
-    }
-
-    fn next_csv_request(&mut self) -> u64 {
-        self.csv_request += 1;
-        self.csv_request
-    }
-
-    fn render_csv_preview(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let preview = self.csv_preview.as_ref()?;
-        let entity = cx.entity().downgrade();
-        let on_event = move |event: csv_preview::PreviewEvent, _: &mut Window, cx: &mut App| {
-            let result = entity.update(cx, |this, cx| match event {
-                csv_preview::PreviewEvent::Delimiter(delimiter) => this.reparse_csv(delimiter, cx),
-                csv_preview::PreviewEvent::DecimalMark(mark) => {
-                    if let Some(preview) = &mut this.csv_preview {
-                        preview.guess.decimal_mark = mark;
-                        preview.rebuild();
-                        cx.notify();
-                    }
-                }
-                csv_preview::PreviewEvent::DateOrder(order) => {
-                    if let Some(preview) = &mut this.csv_preview {
-                        preview.guess.date_order = order;
-                        preview.rebuild();
-                        cx.notify();
-                    }
-                }
-            });
-            if let Err(error) = result {
-                tracing::debug!(%error, "workspace dropped");
-            }
-        };
-        Some(
-            div()
-                .absolute()
-                .top(rem_px(96.0))
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .child(csv_preview::render(preview, &self.focus, on_event, cx)),
-        )
     }
 
     fn export_csv(
@@ -4560,11 +4344,20 @@ impl Render for Workspace {
                 this.confirm_csv_import(window, cx)
             }))
             .on_action(cx.listener(|this, _: &CancelCsvImport, window, cx| {
-                this.csv_preview = None;
-                this.next_csv_request();
-                let focus = this.grid.focus_handle(cx);
-                window.focus(&focus, cx);
-                cx.notify();
+                this.cancel_csv_import(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SetColumnGeneral, _, cx| {
+                this.change_csv_preview(cx, |preview, cx| {
+                    preview.set_format(ColumnFormat::General, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &SetColumnText, _, cx| {
+                this.change_csv_preview(cx, |preview, cx| {
+                    preview.set_format(ColumnFormat::Text, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToggleKeepAllAsText, _, cx| {
+                this.change_csv_preview(cx, |preview, cx| preview.toggle_keep_all(cx))
             }))
             .on_action(cx.listener(|this, _: &GoTo, window, cx| this.open_go_to(window, cx)))
             .on_action(cx.listener(|this, _: &FillDown, window, cx| this.fill(true, window, cx)))
@@ -4858,7 +4651,7 @@ impl Render for Workspace {
             .children(self.render_toast(cx))
             .children(self.render_notice_card(window, cx))
             .children(self.render_messages(cx))
-            .children(self.render_csv_preview(cx))
+            .children(self.render_csv_preview())
             .children(self.render_format_dialog(cx))
             .children(self.render_close_dialog(cx))
             .children(self.render_generate())

@@ -301,6 +301,19 @@ impl Walk {
         RowIdx::new(row)
     }
 
+    // The column of the file a column of the sheet comes from, whatever was written in it.
+    pub fn file_column(&self, column: ColIdx) -> Option<ColIdx> {
+        let mut index = u32::from(column.get());
+        for layer in self.layers.iter().rev() {
+            if let Layer::Lines(op) = layer
+                && op.axis == LineAxis::Column
+            {
+                index = origin(*op, index)?;
+            }
+        }
+        ColIdx::new(u16::try_from(index).ok()?)
+    }
+
     // Where the end of a run of the file's rows is now, the end being the number of rows
     // before it: rows deleted from the end of the run pull it up, and rows inserted at it
     // leave it where it was.
@@ -535,5 +548,23 @@ mod tests {
         assert_eq!(inserted.current_end(1), 1);
         assert_eq!(inserted.current_end(2), 4);
         assert_eq!(inserted.current_end(0), 0);
+    }
+
+    #[test]
+    fn a_column_of_the_sheet_is_mapped_to_the_column_of_the_file_it_came_from() {
+        let column = |index: u16| ColIdx::new(index).unwrap();
+        let walk = Walk::new(
+            [
+                lines(1, LineAxis::Column, LineChange::Delete, 0, 1),
+                lines(1, LineAxis::Column, LineChange::Insert, 2, 2),
+                lines(1, LineAxis::Row, LineChange::Insert, 0, 1),
+            ],
+            1,
+        );
+        assert_eq!(walk.file_column(column(0)), Some(column(1)));
+        assert_eq!(walk.file_column(column(1)), Some(column(2)));
+        assert_eq!(walk.file_column(column(2)), None);
+        assert_eq!(walk.file_column(column(3)), None);
+        assert_eq!(walk.file_column(column(4)), Some(column(3)));
     }
 }

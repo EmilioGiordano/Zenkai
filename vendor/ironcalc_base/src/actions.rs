@@ -448,6 +448,17 @@ impl<'a> Model<'a> {
         failure.map_or(Ok(()), Err)
     }
 
+    // The string of a string cell, which moves as it is: typing it again would read "00123" as a
+    // number and "=1+1" as a formula.
+    fn moved_string(&self, cell: &Cell) -> Option<String> {
+        match cell {
+            Cell::SharedString { si, .. } => {
+                self.workbook.shared_strings.get(*si as usize).cloned()
+            }
+            _ => None,
+        }
+    }
+
     /// Moves the contents of cell (source_row, source_column) to (target_row, target_column).
     ///
     /// It assumes that the caller has already checked that the move is valid
@@ -509,6 +520,7 @@ impl<'a> Model<'a> {
                 array = Some(*r);
             }
         }
+        let text = self.moved_string(source_cell);
         let formula_or_value = self
             .get_cell_formula(sheet, source_row, source_column)?
             .unwrap_or_else(|| {
@@ -519,7 +531,9 @@ impl<'a> Model<'a> {
                 )
             });
 
-        if let Some((width, height)) = array {
+        if let Some(text) = text {
+            self.set_cell_with_string(sheet, target_row, target_column, &text, style)?;
+        } else if let Some((width, height)) = array {
             // We are moving an array formula, we need to move the whole range
             self.set_user_array_formula(
                 sheet,
@@ -1010,6 +1024,7 @@ impl<'a> Model<'a> {
                 .cell(r.row, column)
                 .ok_or("Expected Cell to exist")?;
             let style_idx = cell.get_style();
+            let text = self.moved_string(cell);
             let formula_or_value =
                 self.get_cell_formula(sheet, r.row, column)?
                     .unwrap_or_else(|| {
@@ -1052,7 +1067,7 @@ impl<'a> Model<'a> {
                 }
             }
 
-            original_cells.push((r.row, formula_or_value, style_idx, array));
+            original_cells.push((r.row, formula_or_value, style_idx, array, text));
             let ws = self.workbook.worksheet_mut(sheet)?;
             ws.remove_cell(r.row, column)?;
         }
@@ -1089,8 +1104,10 @@ impl<'a> Model<'a> {
                     .set_column_width_and_style(c + 1, w, h, s)?;
             }
         }
-        for (r, value, style_idx, array) in original_cells {
-            if let Some(a) = array {
+        for (r, value, style_idx, array, text) in original_cells {
+            if let Some(text) = text {
+                self.set_cell_with_string(sheet, r, target_column, &text, style_idx)?;
+            } else if let Some(a) = array {
                 self.set_user_array_formula(sheet, r, target_column, a.0, a.1, &value)?;
             } else {
                 self.set_user_input(sheet, r, target_column, value)?;
@@ -1124,6 +1141,7 @@ impl<'a> Model<'a> {
                 .cell(row, *c)
                 .ok_or("Expected Cell to exist")?;
             let style_idx = cell.get_style();
+            let text = self.moved_string(cell);
             let formula_or_value = self.get_cell_formula(sheet, row, *c)?.unwrap_or_else(|| {
                 cell.get_localized_text(&self.workbook.shared_strings, self.locale, self.language)
             });
@@ -1158,7 +1176,7 @@ impl<'a> Model<'a> {
                     array = Some(*r);
                 }
             }
-            original_cells.push((*c, formula_or_value, style_idx, array));
+            original_cells.push((*c, formula_or_value, style_idx, array, text));
             let ws = self.workbook.worksheet_mut(sheet)?;
             ws.remove_cell(row, *c)?;
         }
@@ -1177,8 +1195,10 @@ impl<'a> Model<'a> {
                 }
             }
         }
-        for (c, value, style_idx, array) in original_cells {
-            if let Some(array_range) = array {
+        for (c, value, style_idx, array, text) in original_cells {
+            if let Some(text) = text {
+                self.set_cell_with_string(sheet, target_row, c, &text, style_idx)?;
+            } else if let Some(array_range) = array {
                 self.set_user_array_formula(
                     sheet,
                     target_row,

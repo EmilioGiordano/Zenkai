@@ -9,8 +9,8 @@ use zenkai_engine::{
     Engine, EngineError, ShownCells, Workbook, run_with_engine_stack, write_atomic_streaming,
 };
 use zenkai_formats::{
-    CsvError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv, apply, guess,
-    import_input, parse_csv,
+    CsvError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv, TextColumns,
+    apply, import_input, parse_csv, text_input,
 };
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, MAX_ROWS, RowIdx, SheetId};
@@ -86,7 +86,7 @@ pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
 
 pub fn detect_csv_options(path: &Path) -> Result<CsvOptions, String> {
     let read = read_csv(path)?;
-    Ok(CsvOptions::from_read(&read.parsed, &guess(&read.parsed)))
+    Ok(CsvOptions::detected(&read.parsed))
 }
 
 pub struct Baseline {
@@ -131,6 +131,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
         other => LoadFailure::Engine(other.into_engine_error(path)),
     })?;
     let hint = stored
+        .as_ref()
         .map(|options| options.delimiter)
         .or_else(|| tsv_delimiter(path));
     let parsed = parse_csv(&bytes, hint)
@@ -141,12 +142,17 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
             line_ending: parsed.line_ending,
             ..stored
         },
-        None => CsvOptions::from_read(&parsed, &guess(&parsed)),
+        None => CsvOptions::detected(&parsed),
     };
     let mut rows = parsed.rows;
-    apply(options.decimal_mark, options.date_order, &mut rows);
-    let workbook =
-        workbook_from_rows(rows).map_err(|e| LoadFailure::Engine(EngineError::Rejected(e)))?;
+    apply(
+        options.decimal_mark,
+        options.date_order,
+        &options.text,
+        &mut rows,
+    );
+    let workbook = workbook_from_rows(rows, &options.text)
+        .map_err(|e| LoadFailure::Engine(EngineError::Rejected(e)))?;
     let sheet = workbook.sheet_key(SheetId(0));
     Ok(FileLoad {
         workbook,
@@ -162,14 +168,26 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
     })
 }
 
-pub fn workbook_from_rows(mut rows: Vec<Vec<String>>) -> Result<Workbook, String> {
-    for field in rows.iter_mut().flatten() {
-        let rewritten = match import_input(field) {
-            Cow::Owned(text) => Some(text),
-            Cow::Borrowed(_) => None,
-        };
-        if let Some(text) = rewritten {
-            *field = text;
+// The fields of a Text column go in as text cells, whatever they look like; the others are read
+// as Excel reads what it opens.
+pub fn workbook_from_rows(
+    mut rows: Vec<Vec<String>>,
+    text: &TextColumns,
+) -> Result<Workbook, String> {
+    for row in &mut rows {
+        for (column, field) in row.iter_mut().enumerate() {
+            let input = if text.holds_field(column) {
+                text_input(field)
+            } else {
+                import_input(field)
+            };
+            let rewritten = match input {
+                Cow::Owned(owned) => Some(owned),
+                Cow::Borrowed(_) => None,
+            };
+            if let Some(owned) = rewritten {
+                *field = owned;
+            }
         }
     }
     run_with_engine_stack(move || {
@@ -451,7 +469,7 @@ mod tests {
         std::fs::write(&source, "name;qty\nAna;3\nLuis;4\n").unwrap();
         let parsed = read_csv(&source).unwrap().parsed;
         assert_eq!(parsed.delimiter, Delimiter::Semicolon);
-        let workbook = workbook_from_rows(parsed.rows).unwrap();
+        let workbook = workbook_from_rows(parsed.rows, &TextColumns::default()).unwrap();
         let target = dir.path().join("out.csv");
         let shown = workbook.shown_cells(SheetId(0)).unwrap();
         write_csv_file(&target, &shown, &AtomicBool::new(false)).unwrap();
@@ -594,8 +612,13 @@ mod tests {
     #[test]
     fn decimal_comma_fields_import_as_numbers() {
         let mut rows = vec![vec!["1.234,5".to_string(), "=A1*2".to_string()]];
-        zenkai_formats::normalize_decimal_comma(&mut rows);
-        let workbook = workbook_from_rows(rows).unwrap();
+        apply(
+            DecimalMark::Comma,
+            zenkai_formats::DateOrder::MonthFirst,
+            &TextColumns::default(),
+            &mut rows,
+        );
+        let workbook = workbook_from_rows(rows, &TextColumns::default()).unwrap();
         let doubled = number_at(&workbook, 1);
         assert_eq!(doubled, Some(2469.0));
     }
@@ -603,8 +626,13 @@ mod tests {
     #[test]
     fn day_first_dates_import_as_the_right_day() {
         let mut rows = vec![vec!["08/10/2026".to_string(), "25/10/2026".to_string()]];
-        zenkai_formats::normalize_day_first(&mut rows);
-        let workbook = workbook_from_rows(rows).unwrap();
+        apply(
+            DecimalMark::Dot,
+            zenkai_formats::DateOrder::DayFirst,
+            &TextColumns::default(),
+            &mut rows,
+        );
+        let workbook = workbook_from_rows(rows, &TextColumns::default()).unwrap();
         let serial = |col| number_at(&workbook, col);
         // 8 October 2026 and 25 October 2026 as Excel serials.
         assert_eq!(serial(0), Some(46303.0));
@@ -629,7 +657,7 @@ mod tests {
             decimal_mark: DecimalMark::Dot,
             ..csv.options
         };
-        let again = load_csv(&path, Some(stored)).unwrap();
+        let again = load_csv(&path, Some(stored.clone())).unwrap();
         assert_eq!(again.csv.unwrap().options, stored);
         assert_eq!(number_at(&again.workbook, 0), None);
     }

@@ -201,7 +201,12 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
         return Some(LinkLoad::Missing);
     };
     let loaded = if files::opens_as_itself(path) {
-        csv_io::load_csv(path, link.csv.as_ref().and_then(|binding| binding.options))
+        csv_io::load_csv(
+            path,
+            link.csv
+                .as_ref()
+                .and_then(|binding| binding.options.clone()),
+        )
     } else {
         files::load_workbook(path, reader, cancel)
     };
@@ -895,7 +900,7 @@ mod tests {
 
     use zenkai_agent::protected_view::FileOrigin;
     use zenkai_engine::{Engine, SaveTarget, Stamp, Workbook, XlsxReader};
-    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
+    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding, TextColumns};
     use zenkai_grid::ViewState;
     use zenkai_types::{CellPos, SheetId, WorkbookId};
 
@@ -1093,8 +1098,9 @@ mod tests {
             line_ending: LineEnding::Crlf,
             decimal_mark: DecimalMark::Comma,
             date_order: DateOrder::MonthFirst,
+            text: TextColumns::default(),
         };
-        csv_link(&mut setup, options);
+        csv_link(&mut setup, options.clone());
         let (file, provenance, _) = loaded(read(&setup.link));
         assert_eq!(provenance, Provenance::File);
         assert_eq!(text(&file.workbook), "1.5");

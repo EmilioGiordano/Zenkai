@@ -138,7 +138,7 @@ mod tests {
     use crate::spaces::SpaceId;
     use zenkai_engine::FormatEdits;
     use zenkai_engine::Unsupported;
-    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
+    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding, TextColumns};
     use zenkai_types::{ContentSpan, LoggedChange, SheetChange, SheetId};
 
     fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
@@ -448,6 +448,7 @@ mod tests {
             line_ending: LineEnding::Lf,
             decimal_mark: DecimalMark::Comma,
             date_order: DateOrder::DayFirst,
+            text: TextColumns::default(),
         }
     }
 
@@ -577,8 +578,8 @@ mod tests {
         let path = dir.path().join("ventas.csv");
         std::fs::write(&path, crate::csv_save::tests::SALES).unwrap();
         let first = csv_io::load_csv(&path, None).unwrap();
-        let options = first.csv.as_ref().unwrap().options;
-        let stored = serde_json::to_string(&CsvBinding::new(options)).unwrap();
+        let options = first.csv.as_ref().unwrap().options.clone();
+        let stored = serde_json::to_string(&CsvBinding::new(options.clone())).unwrap();
         let mut record = file(Some(path.to_str().unwrap()), true);
         record.csv = Some(serde_json::from_str(&stored).unwrap());
 

@@ -5,10 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use zenkai_engine::{EngineError, FileCell, FileCells, FormatEdits, ShownCells, Workbook};
 use zenkai_formats::{
-    FinalNewline, date_serial, iso_date, neutralize, number_text, stored_number_text,
+    FinalNewline, TextColumns, at_risk_among, date_serial, iso_date, neutralize, number_text,
+    stored_number_text,
 };
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, LoggedChange, MAX_ROWS, RowIdx, SheetChange, SheetId};
+use zenkai_types::{
+    CellPos, ColIdx, LoggedChange, MAX_COLS, MAX_ROWS, RowIdx, SheetChange, SheetId,
+};
 
 use crate::csv_export_size::ExportSize;
 use crate::csv_io::{self, AsRead, BaselineRead, Layout, Shape};
@@ -92,6 +95,25 @@ enum FormulaCells {
 struct Classified {
     shown: ShownCells,
     formulas: FormulaCells,
+}
+
+// With a log that cannot be followed there is no telling which column is which, so the choice is
+// the one a fresh open of the file as it is now would make.
+fn detected_text_columns(shown: &ShownCells) -> TextColumns {
+    let fields = shown
+        .cells
+        .iter()
+        .map(|(pos, text)| (pos.row.get() as usize, pos.col, text.as_str()));
+    TextColumns::chosen(at_risk_among(fields).iter().map(|risk| risk.column))
+}
+
+// The columns that hold the fields the Text columns of the file held, after columns were
+// inserted or deleted, so the stored choice names the same data.
+fn moved_text_columns(read_as_text: &TextColumns, walk: &Walk) -> TextColumns {
+    TextColumns::chosen((0..MAX_COLS).filter_map(ColIdx::new).filter(|column| {
+        walk.file_column(*column)
+            .is_some_and(|origin| read_as_text.holds(origin))
+    }))
 }
 
 // A cell nobody wrote since the file was read takes the text of its own field, wherever the
@@ -218,8 +240,8 @@ pub fn save_csv_file(
     request: &CsvSaveRequest,
     cancel: &AtomicBool,
 ) -> Result<CsvSave, EngineError> {
-    let options = match request.binding.options {
-        Some(options) => options,
+    let mut options = match &request.binding.options {
+        Some(options) => options.clone(),
         None => csv_io::detect_csv_options(&request.path).map_err(EngineError::Rejected)?,
     };
     let baseline = match csv_io::read_baseline(&request.path, options.delimiter)? {
@@ -262,7 +284,15 @@ pub fn save_csv_file(
     let walk = Walk::new(pending, sheet_key);
     let own_sheet = request.binding.file_sheet == Some(sheet_key);
     let own_fields = !unknown && !changed && own_sheet;
+    let keeps_columns = options.text != TextColumns::Everything;
     let classified = classify(found, &walk, own_fields, &options, &mut file, cancel)?;
+    if keeps_columns {
+        if !own_fields {
+            options.text = detected_text_columns(&classified.shown);
+        } else if walk.moves_columns() {
+            options.text = moved_text_columns(&options.text, &walk);
+        }
+    }
     drop(file);
     let losses = Losses {
         sheets: request.sheets > 1,
@@ -343,6 +373,9 @@ pub fn save_csv_file(
 }
 
 #[cfg(test)]
+mod text_columns_tests;
+
+#[cfg(test)]
 pub(crate) mod tests {
     use std::path::Path;
 
@@ -377,7 +410,7 @@ pub(crate) mod tests {
     fn request(path: &Path, csv: &CsvLoad, sheets: usize) -> CsvSaveRequest {
         CsvSaveRequest {
             path: path.to_path_buf(),
-            binding: CsvBinding::new(csv.options).with_sheet(csv.sheet),
+            binding: CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet),
             sheets,
             sheet: SheetId(0),
             changed: ChangedFile::Ask,
@@ -920,7 +953,7 @@ pub(crate) mod tests {
                 .delete_rows(SheetId(0), RowIdx::clamped(9), 1)
                 .unwrap();
         }
-        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        let mut binding = CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet);
         binding.note(load.workbook.format_edits(), load.workbook.changes_since(0));
         assert!(binding.log.has_lost());
         let shared = RwLock::new(load.workbook);
@@ -1204,7 +1237,7 @@ pub(crate) mod tests {
         let other = load.workbook.add_sheet().unwrap();
         load.workbook.set_input(other, at(0, 0), "bee").unwrap();
         let shared = RwLock::new(load.workbook);
-        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        let mut binding = CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet);
         binding.accepted.sheets = true;
 
         let mut asked = request(&path, &csv, 2);
@@ -1260,8 +1293,13 @@ pub(crate) mod tests {
         let guessed = zenkai_formats::guess(&read.parsed);
         let options = CsvOptions::from_read(&read.parsed, &guessed);
         let mut rows = read.parsed.rows;
-        zenkai_formats::apply(options.decimal_mark, options.date_order, &mut rows);
-        let workbook = csv_io::workbook_from_rows(rows).unwrap();
+        zenkai_formats::apply(
+            options.decimal_mark,
+            options.date_order,
+            &options.text,
+            &mut rows,
+        );
+        let workbook = csv_io::workbook_from_rows(rows, &options.text).unwrap();
         let mut document = crate::document::Document::new(
             zenkai_types::WorkbookId(0),
             crate::spaces::SpaceId(0),
@@ -1347,7 +1385,7 @@ pub(crate) mod tests {
         let csv = load.csv.take().unwrap();
         let shared = RwLock::new(load.workbook);
         let cancel = AtomicBool::new(false);
-        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        let mut binding = CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet);
         let batch = |binding: &mut CsvBinding| {
             let workbook = shared.read().unwrap();
             let seen = binding.seen_edits.seq;

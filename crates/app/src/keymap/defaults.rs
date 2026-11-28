@@ -207,8 +207,31 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-shift-p", TogglePalette, CONTEXT),
         bind("escape", CloseRename, Some("RenameBar")),
         bind("ctrl-g", GoTo, CONTEXT),
-        bind("enter", ConfirmCsvImport, Some("CsvPreview")),
+        bind("enter", ConfirmCsvImport, Some("CsvPreview && !CsvControl")),
         bind("escape", CancelCsvImport, Some("CsvPreview")),
+        bind("tab", FocusNextControl, Some("CsvPreview")),
+        bind("shift-tab", FocusPreviousControl, Some("CsvPreview")),
+        bind("left", CsvColumnLeft, Some("CsvPreview && !CsvRadios")),
+        bind("right", CsvColumnRight, Some("CsvPreview && !CsvRadios")),
+        bind("home", CsvColumnFirst, Some("CsvPreview")),
+        bind("end", CsvColumnLast, Some("CsvPreview")),
+        bind("pageup", CsvColumnPageBack, Some("CsvPreview")),
+        bind("pagedown", CsvColumnPageForward, Some("CsvPreview")),
+        bind("up", ScrollCsvPreviewUp, Some("CsvPreview && !CsvRadios")),
+        bind(
+            "down",
+            ScrollCsvPreviewDown,
+            Some("CsvPreview && !CsvRadios"),
+        ),
+        bind(
+            "space",
+            SwitchColumnFormat,
+            Some("CsvPreview && !CsvControl"),
+        ),
+        bind("left", SwitchColumnFormat, Some("CsvRadios")),
+        bind("right", SwitchColumnFormat, Some("CsvRadios")),
+        bind("up", SwitchColumnFormat, Some("CsvRadios")),
+        bind("down", SwitchColumnFormat, Some("CsvRadios")),
         bind("f5", GoTo, CONTEXT),
         bind("ctrl-d", FillDown, CONTEXT),
         bind("ctrl-r", FillRight, CONTEXT),
@@ -354,7 +377,27 @@ pub fn defaults() -> Vec<Binding> {
     ]
     .into_iter()
     .flatten()
+    .chain(csv_preview_mnemonics())
     .collect()
+}
+
+// Excel for Mac has no Alt keys in this dialog, and Option types characters there.
+#[cfg(not(target_os = "macos"))]
+fn csv_preview_mnemonics() -> Vec<Binding> {
+    let preview = Some("CsvPreview");
+    [
+        bind("alt-g", SetColumnGeneral, preview),
+        bind("alt-t", SetColumnText, preview),
+        bind("alt-k", ToggleKeepAllAsText, preview),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn csv_preview_mnemonics() -> Vec<Binding> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -365,11 +408,76 @@ mod tests {
 
     #[test]
     fn every_default_shortcut_parses() {
+        // The Alt keys of the CSV preview come after the marker, as only some systems have them.
         let written = include_str!("defaults.rs")
+            .split("// Excel for Mac has no Alt keys")
+            .next()
+            .unwrap_or_default()
             .lines()
             .filter(|line| line.starts_with("        bind("))
             .count();
-        assert_eq!(defaults().len(), written);
+        assert_eq!(defaults().len(), written + csv_preview_mnemonics().len());
+    }
+
+    #[test]
+    fn the_csv_preview_has_its_alt_keys_where_the_system_has_them() {
+        let preview_keys: Vec<(String, &str)> = defaults()
+            .into_iter()
+            .filter(|binding| binding.context == Some("CsvPreview"))
+            .map(|binding| (binding.chord.as_str().to_string(), binding.action.name()))
+            .filter(|(chord, _)| chord.starts_with("alt-"))
+            .collect();
+        if cfg!(target_os = "macos") {
+            assert!(preview_keys.is_empty());
+        } else {
+            assert_eq!(
+                preview_keys,
+                [
+                    (
+                        "alt-g".to_string(),
+                        <SetColumnGeneral as Action>::name_for_type()
+                    ),
+                    (
+                        "alt-t".to_string(),
+                        <SetColumnText as Action>::name_for_type()
+                    ),
+                    (
+                        "alt-k".to_string(),
+                        <ToggleKeepAllAsText as Action>::name_for_type()
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn the_column_keys_of_the_csv_preview_work_from_the_radios_too() {
+        for (chord, action) in [
+            ("home", <CsvColumnFirst as Action>::name_for_type()),
+            ("end", <CsvColumnLast as Action>::name_for_type()),
+            ("pageup", <CsvColumnPageBack as Action>::name_for_type()),
+            (
+                "pagedown",
+                <CsvColumnPageForward as Action>::name_for_type(),
+            ),
+        ] {
+            let context = defaults()
+                .into_iter()
+                .find(|binding| binding.chord.as_str() == chord && binding.action.name() == action)
+                .and_then(|binding| binding.context);
+            assert_eq!(context, Some("CsvPreview"), "{chord}");
+        }
+    }
+    #[test]
+    fn enter_opens_the_csv_preview_only_where_no_control_takes_it() {
+        let enter = defaults()
+            .into_iter()
+            .find(|binding| {
+                binding.chord.as_str() == "enter"
+                    && binding.action.name() == <ConfirmCsvImport as Action>::name_for_type()
+            })
+            .and_then(|binding| binding.context);
+        assert_eq!(enter, Some("CsvPreview && !CsvControl"));
     }
 
     #[test]

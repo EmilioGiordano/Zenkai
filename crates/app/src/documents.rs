@@ -190,9 +190,9 @@ fn rebuilt_csv_binding(
     let unrecorded = link.csv.is_none();
     let binding = match (read, link.csv.clone()) {
         (Some(read), linked) => {
-            let linked = linked.unwrap_or_else(|| CsvBinding::new(read.options));
+            let linked = linked.unwrap_or_else(|| CsvBinding::new(read.options.clone()));
             CsvBinding {
-                options: Some(read.options),
+                options: Some(read.options.clone()),
                 file_sheet: read.sheet.or(linked.file_sheet),
                 ..linked
             }

@@ -3,8 +3,9 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::csv_format::{Delimiter, ParsedCsv};
-use crate::dates::{DateOrder, detect_date_order, normalize_day_first};
-use crate::numbers::{detect_decimal_comma, normalize_decimal_comma, number_value};
+use crate::csv_text::TextColumns;
+use crate::dates::{DateOrder, day_first_field, detect_date_order};
+use crate::numbers::{decimal_comma_field, detect_decimal_comma, number_value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,13 +23,34 @@ pub struct Guess {
     pub columns: usize,
 }
 
-// Dates go first: a day-first date written with dots must not be read as a grouped number.
-pub fn apply(decimal_mark: DecimalMark, date_order: DateOrder, rows: &mut [Vec<String>]) {
-    if date_order == DateOrder::DayFirst {
-        normalize_day_first(rows);
-    }
-    if decimal_mark == DecimalMark::Comma {
-        normalize_decimal_comma(rows);
+// What the import makes of one field of a General column, or None when it stays. Dates go
+// first: a day-first date written with dots must not be read as a grouped number.
+pub fn read_field(decimal_mark: DecimalMark, date_order: DateOrder, field: &str) -> Option<String> {
+    let dated = (date_order == DateOrder::DayFirst)
+        .then(|| day_first_field(field))
+        .flatten();
+    let decimal = (decimal_mark == DecimalMark::Comma)
+        .then(|| decimal_comma_field(dated.as_deref().unwrap_or(field)))
+        .flatten();
+    decimal.or(dated)
+}
+
+// The fields of a Text column are left as written.
+pub fn apply(
+    decimal_mark: DecimalMark,
+    date_order: DateOrder,
+    text: &TextColumns,
+    rows: &mut [Vec<String>],
+) {
+    for row in rows {
+        for (index, field) in row.iter_mut().enumerate() {
+            if text.holds_field(index) {
+                continue;
+            }
+            if let Some(rewritten) = read_field(decimal_mark, date_order, field) {
+                *field = rewritten;
+            }
+        }
     }
 }
 
@@ -87,6 +109,7 @@ mod tests {
     use super::*;
     use crate::csv_format::parse_csv;
     use crate::numbers::decimal_comma_field;
+    use zenkai_types::ColIdx;
 
     #[test]
     fn a_semicolon_file_with_decimal_commas_reads_numbers_and_dates_that_way() {
@@ -96,7 +119,12 @@ mod tests {
         assert_eq!(guessed.date_order, DateOrder::DayFirst);
         assert_eq!(guessed.columns, 2);
         let mut rows = parsed.rows;
-        apply(guessed.decimal_mark, guessed.date_order, &mut rows);
+        apply(
+            guessed.decimal_mark,
+            guessed.date_order,
+            &TextColumns::default(),
+            &mut rows,
+        );
         assert_eq!(rows[1], ["2026-10-08", "1.5"]);
     }
 
@@ -169,7 +197,12 @@ mod tests {
             "-".to_string(),
             "+5".to_string(),
         ]];
-        apply(DecimalMark::Comma, DateOrder::DayFirst, &mut rows);
+        apply(
+            DecimalMark::Comma,
+            DateOrder::DayFirst,
+            &TextColumns::default(),
+            &mut rows,
+        );
         let inputs: Vec<String> = rows[0]
             .iter()
             .map(|field| import_input(field).into_owned())
@@ -178,5 +211,60 @@ mod tests {
             inputs,
             ["-3.5", "-1234.5", "-12.5%", "'+34 600", "'-", "+5"]
         );
+    }
+
+    #[test]
+    fn the_fields_of_a_text_column_are_not_rewritten_and_the_others_are() {
+        let original = vec![
+            vec![
+                "1,5".to_string(),
+                "1,5".to_string(),
+                "08/10/2026".to_string(),
+            ],
+            vec![
+                "08/10/2026".to_string(),
+                "2,25".to_string(),
+                "x".to_string(),
+            ],
+        ];
+        let mut rows = original.clone();
+        let text = TextColumns::chosen([ColIdx::clamped(0)]);
+        apply(DecimalMark::Comma, DateOrder::DayFirst, &text, &mut rows);
+        assert_eq!(rows[0], ["1,5", "1.5", "2026-10-08"]);
+        assert_eq!(rows[1], ["08/10/2026", "2.25", "x"]);
+
+        let mut every = original.clone();
+        apply(
+            DecimalMark::Comma,
+            DateOrder::DayFirst,
+            &TextColumns::Everything,
+            &mut every,
+        );
+        assert_eq!(every, original);
+
+        let mut none = original.clone();
+        apply(
+            DecimalMark::Comma,
+            DateOrder::DayFirst,
+            &TextColumns::default(),
+            &mut none,
+        );
+        assert_eq!(none[0], ["1.5", "1.5", "2026-10-08"]);
+    }
+
+    #[test]
+    fn one_field_is_read_the_way_apply_reads_it() {
+        let comma = DecimalMark::Comma;
+        let dot = DecimalMark::Dot;
+        assert_eq!(
+            read_field(comma, DateOrder::DayFirst, "08/10/2026").as_deref(),
+            Some("2026-10-08")
+        );
+        assert_eq!(
+            read_field(comma, DateOrder::MonthFirst, "1,5").as_deref(),
+            Some("1.5")
+        );
+        assert_eq!(read_field(dot, DateOrder::MonthFirst, "1,5"), None);
+        assert_eq!(read_field(comma, DateOrder::DayFirst, "Ana"), None);
     }
 }
