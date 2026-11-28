@@ -631,3 +631,94 @@ fn subtotal_leaves_filtered_rows_out_and_rows_hidden_by_hand_only_from_101_on() 
     assert_eq!(book.cell(SHEET, pos("D1")).text, "11");
     assert_eq!(book.cell(SHEET, pos("E1")).text, "10");
 }
+
+#[derive(Clone, Debug)]
+enum FilterOp {
+    Set(u32, String),
+    HideRow(u32, bool),
+    Toggle,
+    ShowNames(Vec<&'static str>, bool),
+    ShowQty(Vec<&'static str>),
+    Clear,
+    Sort(bool),
+}
+
+fn filter_op() -> impl Strategy<Value = FilterOp> {
+    prop_oneof![
+        (2..=8u32, prop::sample::select(vec!["x", "y", "Y", "", "7"]))
+            .prop_map(|(number, value)| FilterOp::Set(number, value.to_string())),
+        (2..=8u32, any::<bool>()).prop_map(|(number, hidden)| FilterOp::HideRow(number, hidden)),
+        Just(FilterOp::Toggle),
+        (
+            prop::collection::vec(prop::sample::select(vec!["x", "y", "z", "7"]), 0..3),
+            any::<bool>()
+        )
+            .prop_map(|(values, blanks)| FilterOp::ShowNames(values, blanks)),
+        prop::collection::vec(prop::sample::select(vec!["1", "2", "3", "6"]), 0..3)
+            .prop_map(FilterOp::ShowQty),
+        Just(FilterOp::Clear),
+        any::<bool>().prop_map(FilterOp::Sort),
+    ]
+}
+
+// Whether the operation took an undo step.
+fn apply_filter_op(book: &mut Workbook, op: &FilterOp) -> bool {
+    let result = match op {
+        FilterOp::Set(number, value) => {
+            book.set_input(SHEET, CellPos::new(row(*number), col('A')), value)
+        }
+        FilterOp::HideRow(number, hidden) => {
+            let line = Range::single(CellPos::new(row(*number), col('A')));
+            book.set_rows_hidden(SHEET, line, *hidden)
+        }
+        FilterOp::Toggle => book.toggle_auto_filter(SHEET, range("A1:B7")),
+        FilterOp::ShowNames(values, blanks) => {
+            book.set_column_filter(SHEET, col('A'), shown(values, *blanks))
+        }
+        FilterOp::ShowQty(values) => book.set_column_filter(SHEET, col('B'), shown(values, false)),
+        FilterOp::Clear => book.clear_filters(SHEET),
+        // With every data row hidden there is nothing to sort and no step to take.
+        FilterOp::Sort(descending) => {
+            if !book.auto_filter(SHEET).is_some_and(|view| view.found > 0) {
+                return false;
+            }
+            book.sort_filter(SHEET, col('A'), *descending)
+        }
+    };
+    result.is_ok()
+}
+
+fn filter_snapshot(book: &Workbook) -> String {
+    let inputs: Vec<String> = (1..=8)
+        .flat_map(|number| {
+            ['A', 'B'].map(|letter| book.input(SHEET, CellPos::new(row(number), col(letter))))
+        })
+        .collect();
+    format!(
+        "{:?}|{inputs:?}|{:?}",
+        hidden_rows(book),
+        book.auto_filter(SHEET)
+    )
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+
+    #[test]
+    fn undoing_filter_commands_restores_the_start_and_redoing_them_the_end(
+        ops in prop::collection::vec(filter_op(), 1..12),
+    ) {
+        let mut book = people();
+        let start = filter_snapshot(&book);
+        let applied = ops.iter().filter(|op| apply_filter_op(&mut book, op)).count();
+        let end = filter_snapshot(&book);
+        for _ in 0..applied {
+            book.undo().unwrap();
+        }
+        prop_assert_eq!(filter_snapshot(&book), start);
+        for _ in 0..applied {
+            book.redo().unwrap();
+        }
+        prop_assert_eq!(filter_snapshot(&book), end);
+    }
+}
