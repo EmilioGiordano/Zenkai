@@ -1183,4 +1183,82 @@ mod tests {
         assert_eq!(attribute(tag, "customHeight"), Some("1"));
         assert_eq!(attribute(tag, "Height"), None);
     }
+
+    fn with_format(format: &str) -> SheetSettings {
+        SheetSettings {
+            format: Some(format.to_string()),
+            ..SheetSettings::default()
+        }
+    }
+
+    const SET_BY_HAND: DefaultSizes = DefaultSizes {
+        row_height: Some(22.5),
+        column_width: Some(20.0),
+    };
+
+    #[test]
+    fn the_sizes_of_the_model_replace_the_attributes_of_the_file_and_keep_the_others() {
+        let file = with_format(r#" baseColWidth="8" defaultRowHeight="15" thickTop="1""#);
+        let sized = file.with_default_sizes(SET_BY_HAND);
+        assert_eq!(
+            sized.format.as_deref(),
+            Some(
+                r#" baseColWidth="8" defaultColWidth="20" defaultRowHeight="22.5" customHeight="1" thickTop="1""#
+            )
+        );
+        assert_eq!(sized.file_row_height(), Some(22.5));
+        assert_eq!(sized.file_column_width(), Some(20.0));
+    }
+
+    #[test]
+    fn a_sheet_that_carried_no_format_gets_one_with_the_sizes() {
+        let sized = SheetSettings::default().with_default_sizes(DefaultSizes {
+            row_height: None,
+            column_width: Some(12.5),
+        });
+        assert_eq!(sized.format.as_deref(), Some(r#" defaultColWidth="12.5""#));
+        assert!(sized.format_element().contains(r#" defaultRowHeight="15""#));
+        assert_eq!(sized.file_row_height(), None);
+    }
+
+    #[test]
+    fn without_sizes_in_the_model_the_settings_are_as_the_file_had_them() {
+        let file = with_format(r#" defaultRowHeight="18" customHeight="1""#);
+        assert_eq!(
+            file.clone().with_default_sizes(DefaultSizes::default()),
+            file
+        );
+        assert_eq!(file.file_row_height(), Some(18.0));
+    }
+
+    #[test]
+    fn only_a_row_height_the_file_marks_as_custom_counts() {
+        assert_eq!(
+            with_format(r#" defaultRowHeight="18""#).file_row_height(),
+            None
+        );
+        assert_eq!(
+            with_format(r#" defaultRowHeight="18" customHeight="0""#).file_row_height(),
+            None
+        );
+        assert_eq!(
+            with_format(r#" defaultRowHeight="0" customHeight="1""#).file_row_height(),
+            None
+        );
+        assert_eq!(
+            with_format(r#" defaultColWidth="0""#).file_column_width(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_settings_a_sheet_writes_include_the_sizes_of_the_model() {
+        let mut model = ironcalc::base::Model::new_empty("b", "en", "UTC", "en").unwrap();
+        let carried = Carried::default();
+        assert!(carried.written(&model.workbook.worksheets[0]).is_none());
+        model.workbook.worksheets[0].default_sizes = SET_BY_HAND;
+        let written = carried.written(&model.workbook.worksheets[0]).unwrap();
+        assert_eq!(written.file_row_height(), Some(22.5));
+        assert_eq!(written.file_column_width(), Some(20.0));
+    }
 }
