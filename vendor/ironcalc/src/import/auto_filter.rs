@@ -54,7 +54,8 @@ pub(super) fn load_auto_filter(ws: Node) -> Option<AutoFilter> {
     let sort_state = node
         .children()
         .find(|n| n.is_element() && n.has_tag_name("sortState"))
-        .and_then(load_sort_state);
+        .and_then(load_sort_state)
+        .filter(SortState::is_valid);
     let filter = AutoFilter {
         first_row,
         first_column,
