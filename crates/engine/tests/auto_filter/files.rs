@@ -213,3 +213,52 @@ fn a_rule_only_excel_edits_is_kept_shown_as_custom_and_can_be_cleared() {
         assert!(book.auto_filter(SHEET).unwrap().criteria.is_empty());
     }
 }
+
+#[test]
+fn a_filter_written_by_another_program_reads_and_saves_the_same() {
+    use rust_xlsxwriter::{FilterCondition, FilterCriteria};
+    let dir = tempfile::tempdir().unwrap();
+    let mut source = rust_xlsxwriter::Workbook::new();
+    let sheet = source.add_worksheet();
+    sheet.write_string(0, 0, "Name").unwrap();
+    sheet.write_string(0, 1, "Qty").unwrap();
+    for (number, (name, qty)) in (1u32..).zip([("x", 1.0), ("y", 2.0), ("x", 3.0), ("z", 4.0)]) {
+        sheet.write_string(number, 0, name).unwrap();
+        sheet.write_number(number, 1, qty).unwrap();
+    }
+    sheet.autofilter(0, 0, 4, 1).unwrap();
+    sheet
+        .filter_column(0, &FilterCondition::new().add_list_filter("x"))
+        .unwrap();
+    sheet
+        .filter_column(
+            1,
+            &FilterCondition::new().add_custom_filter(FilterCriteria::GreaterThan, 0.5),
+        )
+        .unwrap();
+    let path = dir.path().join("written.xlsx");
+    source.save(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(matches!(compare_readers(&bytes), ReaderComparison::Same));
+
+    let views: Vec<_> = READERS
+        .into_iter()
+        .map(|reader| {
+            let book = open(dir.path(), &bytes, reader);
+            assert_eq!(hidden_rows(&book), [3, 5]);
+            book.auto_filter(SHEET).unwrap()
+        })
+        .collect();
+    assert_eq!(views[0], views[1]);
+    assert_eq!(views[0].range, range("A1:B5"));
+    assert!(matches!(
+        views[0].criteria.as_slice(),
+        [(_, ColumnCriteria::Values(_)), (_, ColumnCriteria::Custom)]
+    ));
+
+    let book = open(dir.path(), &bytes, XlsxReader::Fast);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let reopened = open(elsewhere.path(), &book.to_xlsx().unwrap(), XlsxReader::Fast);
+    assert_eq!(reopened.auto_filter(SHEET).as_ref(), Some(&views[0]));
+    assert_eq!(hidden_rows(&reopened), [3, 5]);
+}
