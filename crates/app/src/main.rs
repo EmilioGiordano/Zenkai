@@ -42,6 +42,7 @@ mod jump;
 mod keymap;
 mod language;
 mod line_size;
+mod line_size_apply;
 mod logging;
 mod markdown_depth;
 mod markdown_highlight;
