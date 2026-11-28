@@ -12,6 +12,7 @@ use crate::actions::*;
 use crate::autocomplete;
 use crate::cell_cache;
 use crate::fill_handle;
+use crate::filter_button::{self, FilterBar, Rect as ButtonRect};
 use crate::formula_refs;
 use crate::layout::Layout;
 use crate::paint::{self, Frame};
@@ -199,6 +200,7 @@ pub enum GridEvent {
         range: Range,
     },
     AutoFitRequested(ColIdx),
+    FilterButton(ColIdx),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,6 +251,9 @@ pub struct Grid {
     suggestion: usize,
     used_end: CellPos,
     scroll_drag: Option<ScrollDrag>,
+    filter: Option<Rc<FilterBar>>,
+    filter_open: Option<ColIdx>,
+    filter_hover: Option<ColIdx>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -265,6 +270,7 @@ pub struct SheetView {
     pub frozen_cols: u16,
     pub hidden: Hidden,
     pub merges: Vec<Range>,
+    pub filter: Option<FilterBar>,
 }
 
 impl EventEmitter<GridEvent> for Grid {}
@@ -311,6 +317,9 @@ impl Grid {
             suggestion: 0,
             used_end: CellPos::default(),
             scroll_drag: None,
+            filter: None,
+            filter_open: None,
+            filter_hover: None,
         }
     }
 
@@ -404,6 +413,15 @@ impl Grid {
         self.hidden = view.hidden;
         self.merges = Rc::new(view.merges);
         self.used_end = view.used_end;
+        let filter = view.filter.map(Rc::new);
+        if self
+            .filter_open
+            .is_some_and(|col| !filter.as_ref().is_some_and(|bar| bar.has_button(col)))
+        {
+            self.filter_open = None;
+        }
+        self.filter_hover = None;
+        self.filter = filter;
     }
 
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
@@ -1507,6 +1525,9 @@ impl Render for Grid {
             header_height: self.header_height(),
             gridlines: !self.hidden.gridlines,
             headings: !self.hidden.headings,
+            filter: self.filter.clone(),
+            filter_open: self.filter_open,
+            filter_hover: self.filter_hover,
             frozen_rows: self.frozen_rows,
             frozen_cols: self.frozen_cols,
             merges: self.merges.clone(),
@@ -1761,6 +1782,7 @@ impl Render for Grid {
                 .size_full(),
             )
             .children(self.render_suggestions(cx))
+            .children(self.render_filter_buttons(cx))
     }
 }
 
@@ -1821,6 +1843,113 @@ impl Grid {
     fn sheet_end(&mut self, extend: bool, cx: &mut Context<Self>) {
         cx.emit(GridEvent::EndRequested { extend });
         self.dragging = false;
+    }
+}
+
+impl Grid {
+    pub fn filter(&self) -> Option<&FilterBar> {
+        self.filter.as_deref()
+    }
+
+    pub fn set_filter_open(&mut self, col: Option<ColIdx>, cx: &mut Context<Self>) {
+        if self.filter_open != col {
+            self.filter_open = col;
+            cx.notify();
+        }
+    }
+
+    // The cell as drawn, in the grid's own pixels.
+    fn cell_rect(&self, pos: CellPos) -> Option<ButtonRect> {
+        let right = self.col_right(pos.col)?;
+        let bottom = self.row_bottom(pos.row)?;
+        let (width, height) = (
+            self.layout.col_width(pos.col),
+            self.layout.row_height(pos.row),
+        );
+        Some(ButtonRect {
+            x: (right - width) * self.zoom,
+            y: (bottom - height) * self.zoom,
+            width: width * self.zoom,
+            height: height * self.zoom,
+        })
+    }
+
+    // Where a column's filter list hangs from, in window coordinates: the button, or the
+    // header cell when the column is too narrow for one. `None` while it is scrolled out.
+    pub fn filter_anchor(&self, col: ColIdx) -> Option<Bounds<Pixels>> {
+        let bar = self.filter.as_deref()?;
+        let cell = self.cell_rect(CellPos::new(bar.header_row(), col))?;
+        let area = filter_button::button_box(cell, self.zoom).unwrap_or(cell);
+        Some(Bounds::new(
+            point(
+                self.bounds.origin.x + px(area.x),
+                self.bounds.origin.y + px(area.y),
+            ),
+            size(px(area.width), px(area.height)),
+        ))
+    }
+
+    // One transparent control over each button: it gives the pointer its hit area, the
+    // tooltip and the accessible name; the button itself is drawn with the cells.
+    fn render_filter_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(bar) = self.filter.as_deref() else {
+            return Vec::new();
+        };
+        let frozen = (0..self.frozen_cols).map(|col| ColIdx::clamped(i64::from(col)));
+        let mut buttons = Vec::new();
+        for col in frozen.chain(self.shown_cols.iter().copied()) {
+            if !bar.has_button(col) {
+                continue;
+            }
+            let Some(cell) = self.cell_rect(CellPos::new(bar.header_row(), col)) else {
+                continue;
+            };
+            let Some(button) = filter_button::button_box(cell, self.zoom) else {
+                continue;
+            };
+            let hit = filter_button::hit_area(cell, button);
+            let label = bar.label(col).cloned().unwrap_or_default();
+            let tip = label.clone();
+            buttons.push(
+                div()
+                    .id(("filter-button", u64::from(col.get())))
+                    .role(Role::Button)
+                    .aria_label(label)
+                    .absolute()
+                    .left(px(hit.x))
+                    .top(px(hit.y))
+                    .w(px(hit.width))
+                    .h(px(hit.height))
+                    .cursor_pointer()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                    .on_hover(cx.listener(move |grid, hovered: &bool, _, cx| {
+                        let next = if *hovered {
+                            Some(col)
+                        } else {
+                            grid.filter_hover.filter(|hover| *hover != col)
+                        };
+                        if grid.filter_hover != next {
+                            grid.filter_hover = next;
+                            cx.notify();
+                        }
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |grid, _: &MouseDownEvent, window, cx| {
+                            window.focus(&grid.focus, cx);
+                            if grid.editor.is_some() {
+                                grid.commit_edit(cx);
+                            }
+                            cx.emit(GridEvent::FilterButton(col));
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .into_any_element(),
+            );
+        }
+        buttons
     }
 }
 
