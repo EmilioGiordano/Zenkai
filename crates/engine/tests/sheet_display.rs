@@ -11,6 +11,7 @@ use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const FIRST: SheetId = SheetId(0);
 const SECOND: SheetId = SheetId(1);
+const FIRST_SHEET_PART: &str = "xl/worksheets/sheet1.xml";
 const READERS: [XlsxReader; 2] = [XlsxReader::IronCalc, XlsxReader::Fast];
 
 // The first sheet is what Excel writes for View, Gridlines off, with the print option on.
@@ -24,7 +25,7 @@ fn source(path: &Path) {
     book.save(path).unwrap();
 }
 
-fn edit_first_sheet(path: &Path, edit: impl Fn(String) -> String) {
+fn edit_sheet(path: &Path, sheet: &str, edit: impl Fn(String) -> String) {
     let mut archive = zip::ZipArchive::new(Cursor::new(std::fs::read(path).unwrap())).unwrap();
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for index in 0..archive.len() {
@@ -32,7 +33,7 @@ fn edit_first_sheet(path: &Path, edit: impl Fn(String) -> String) {
         let name = entry.name().to_string();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).unwrap();
-        if name == "xl/worksheets/sheet1.xml" {
+        if name == sheet {
             data = edit(String::from_utf8(data).unwrap()).into_bytes();
         }
         out.start_file(name, zip::write::FileOptions::default())
@@ -45,7 +46,7 @@ fn edit_first_sheet(path: &Path, edit: impl Fn(String) -> String) {
 // Excel writes showRowColHeaders="0" for View, Headings off; the schema's boolean also
 // allows "false", and surrounding whitespace.
 fn hide_headings_of_the_first_sheet(path: &Path, spelling: &str) {
-    edit_first_sheet(path, |xml| {
+    edit_sheet(path, FIRST_SHEET_PART, |xml| {
         let attribute = format!("<sheetView showRowColHeaders=\"{spelling}\" ");
         xml.replacen("<sheetView ", &attribute, 1)
     });
@@ -53,7 +54,7 @@ fn hide_headings_of_the_first_sheet(path: &Path, spelling: &str) {
 
 // A workbook saved with several windows has a sheetView for each.
 fn give_the_first_sheet_views(path: &Path, views: &str) {
-    edit_first_sheet(path, |xml| {
+    edit_sheet(path, FIRST_SHEET_PART, |xml| {
         let start = xml.find("<sheetViews>").unwrap();
         let end = xml.find("</sheetViews>").unwrap() + "</sheetViews>".len();
         format!(
@@ -314,20 +315,66 @@ fn a_full_save_keeps_the_flags_of_a_sheet_that_had_several_windows() {
     }
 }
 
+// Only the fast reader keeps the file's own sheet parts, so only it can copy an unchanged
+// sheet, both windows included, byte for byte.
 #[test]
 fn saving_over_the_file_without_edits_keeps_every_window_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("report.xlsx");
+    let path = dir.path().join("fast.xlsx");
     source(&path);
     give_the_first_sheet_views(&path, TWO_VIEWS);
     let before = views_of_the_first_sheet(&std::fs::read(&path).unwrap());
     assert_eq!(before.len(), 2);
-    for reader in READERS {
-        let book = open(&path, reader);
-        save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
-        assert_eq!(
-            views_of_the_first_sheet(&std::fs::read(&path).unwrap()),
-            before
-        );
+    let book = open(&path, XlsxReader::Fast);
+    save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+    assert_eq!(
+        views_of_the_first_sheet(&std::fs::read(&path).unwrap()),
+        before
+    );
+}
+
+// The IronCalc reader rewrites every sheet, which holds one window: the first one's flags.
+#[test]
+fn the_ironcalc_reader_saves_the_first_windows_flags_without_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ironcalc.xlsx");
+    source(&path);
+    give_the_first_sheet_views(&path, TWO_VIEWS);
+    let book = open(&path, XlsxReader::IronCalc);
+    save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    let views = views_of_the_first_sheet(&saved);
+    let (_, first) = views.iter().find(|(id, _)| id == "0").unwrap();
+    assert_eq!(attribute_of(first, "showGridLines"), Some("0"));
+    assert_eq!(attribute_of(first, "showRowColHeaders"), Some("0"));
+    let reopened = open(&path, XlsxReader::IronCalc);
+    assert!(!reopened.gridlines_shown(FIRST));
+    assert!(!reopened.headings_shown(FIRST));
+}
+
+#[test]
+fn the_selected_sheet_is_read_from_any_xsd_boolean_spelling() {
+    for spelling in ["1", "true", " 1 ", " TRUE "] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.xlsx");
+        source(&path);
+        edit_sheet(&path, FIRST_SHEET_PART, |xml| {
+            xml.replace("tabSelected=\"1\"", "tabSelected=\"0\"")
+        });
+        edit_sheet(&path, "xl/worksheets/sheet2.xml", |xml| {
+            xml.replacen(
+                "<sheetView ",
+                &format!("<sheetView tabSelected=\"{spelling}\" "),
+                1,
+            )
+        });
+        for reader in READERS {
+            let saved = open(&path, reader).to_xlsx().unwrap();
+            let workbook = part(&saved, "xl/workbook.xml");
+            assert!(
+                workbook.contains(r#"activeTab="1""#),
+                "{spelling}: {workbook}"
+            );
+        }
     }
 }
