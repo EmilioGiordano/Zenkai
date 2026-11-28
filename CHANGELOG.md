@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Spreadsheet
+
+- Formula AutoComplete now offers every function Zenkai calculates, such as `TEXTBEFORE`,
+  `TEXTAFTER` and `REGEXEXTRACT`, and shows the arguments of the highlighted one
+  ([#336](https://github.com/EmilioGiordano/Zenkai/issues/336)).
+
 ## [0.1.2]
 
 ### Spreadsheet
