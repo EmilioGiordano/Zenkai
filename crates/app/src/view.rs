@@ -3311,6 +3311,9 @@ impl Workspace {
 
     // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
     fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.size_dialog.is_some() {
+            return;
+        }
         let active = self.grid.read(cx).selection().active;
         let Some(document) = self.documents.active() else {
             return;
