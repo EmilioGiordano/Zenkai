@@ -509,6 +509,13 @@ impl<'a> Model<'a> {
                 array = Some(*r);
             }
         }
+        // Typing a string again would read "00123" as a number and "=1+1" as a formula.
+        let text = match source_cell {
+            Cell::SharedString { si, .. } => {
+                self.workbook.shared_strings.get(*si as usize).cloned()
+            }
+            _ => None,
+        };
         let formula_or_value = self
             .get_cell_formula(sheet, source_row, source_column)?
             .unwrap_or_else(|| {
@@ -519,7 +526,9 @@ impl<'a> Model<'a> {
                 )
             });
 
-        if let Some((width, height)) = array {
+        if let Some(text) = text {
+            self.set_cell_with_string(sheet, target_row, target_column, &text, style)?;
+        } else if let Some((width, height)) = array {
             // We are moving an array formula, we need to move the whole range
             self.set_user_array_formula(
                 sheet,

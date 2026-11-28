@@ -516,6 +516,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `Error parsing workbook: ` prefix, since bitcode replaces its reason with `bitcode error`
   without debug assertions, so the test failed under `cargo test --release`. Stands on its own.
 - Date and time formats accept fractional seconds (`.0`, `.00`, `.000`) after a seconds token, rounding the serial to that precision with carry and using the locale decimal separator (`src/formatter/parser.rs`, `src/formatter/format.rs`; tests in `src/formatter/test/test_time.rs`). Stands on its own.
+- Inserting or deleting rows or columns moves a string cell as a string. It read the text
+  back through `set_user_input`, so a text cell holding `00123` became the number 123 and one
+  holding `=1+1` became a formula (`src/actions.rs`, `move_cell`). Stands on its own. Test:
+  `test_moving_a_text_cell_keeps_it_text` in `src/test/test_actions.rs`.
 
 Zenkai-only, not for upstream:
 

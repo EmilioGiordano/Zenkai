@@ -873,3 +873,33 @@ fn delete_columns_keeps_rows_that_were_already_empty() {
 
     assert!(model.workbook.worksheet(0).unwrap().sheet_data.has_row(7));
 }
+
+#[test]
+fn test_moving_a_text_cell_keeps_it_text() {
+    let mut model = new_empty_model();
+    model._set("A1", "'00123");
+    model._set("B1", "'=1+1");
+    model.evaluate();
+
+    model.insert_rows(0, 1, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("A2"), "00123");
+    assert_eq!(model._get_text("B2"), "=1+1");
+    assert!(!model._has_formula("B2"));
+
+    model.insert_columns(0, 1, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("B2"), "00123");
+    assert_eq!(model._get_text("C2"), "=1+1");
+    assert!(matches!(
+        model._get_cell("B2"),
+        crate::types::Cell::SharedString { .. }
+    ));
+    assert!(!model._has_formula("C2"));
+
+    model.delete_columns(0, 1, 1).unwrap();
+    model.delete_rows(0, 1, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "00123");
+    assert_eq!(model._get_text("B1"), "=1+1");
+}
