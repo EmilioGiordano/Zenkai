@@ -36,6 +36,7 @@ mod generate_dialog;
 mod go_to;
 mod installation;
 mod interface_scale;
+mod internal_clip;
 mod job_pill;
 mod jump;
 mod keymap;
@@ -89,6 +90,7 @@ mod tray;
 mod updates;
 mod version;
 mod view;
+mod visible_cells;
 mod whats_new;
 
 use std::path::PathBuf;

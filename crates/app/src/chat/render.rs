@@ -184,5 +184,6 @@ fn swallow_cell_edits(root: Stateful<Div>) -> Stateful<Div> {
     let root = swallow::<InsertDate>(root);
     let root = swallow::<InsertTime>(root);
     let root = swallow::<FormatCells>(root);
-    swallow::<SelectCurrentRegion>(root)
+    let root = swallow::<SelectCurrentRegion>(root);
+    swallow::<SelectVisibleCells>(root)
 }

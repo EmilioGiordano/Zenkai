@@ -90,6 +90,7 @@ actions!(
         DecreaseDecimal,
         SortAscending,
         SelectCurrentRegion,
+        SelectVisibleCells,
         FreezeTopRow,
         FreezeFirstColumn,
         SortDescending,
