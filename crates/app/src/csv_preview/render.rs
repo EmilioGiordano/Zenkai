@@ -344,12 +344,12 @@ impl CsvPreview {
                             .cursor_pointer()
                             .underline()
                             .font_weight(FontWeight::MEDIUM)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                match jump {
-                                    Jump::Column(column) => this.select(column, cx),
-                                    Jump::NextFlagged => this.select_next_flagged(cx),
+                            .on_click(cx.listener(move |this, _, window, cx| match jump {
+                                Jump::Column(column) => {
+                                    this.select(column, cx);
+                                    this.focus_strip(window, cx);
                                 }
-                                this.focus_strip(window, cx);
+                                Jump::NextFlagged => this.select_next_flagged(cx),
                             }))
                             .child(text)
                             .when(focused, |entry| entry.child(focus_ring(theme))),
