@@ -219,3 +219,16 @@ fn a_multi_cell_if_not_found_spills() {
     assert_row(&model, ["F1", "G1", "H1", "F2"], ["1", "2", "", "11"]);
     assert_row(&model, ["G2", "H2", "F3", "G3"], ["12", "", "10", ""]);
 }
+
+// SWITCH, IFS and IF return the range they are given, whatever their own analysis says.
+#[test]
+fn a_return_array_from_a_function_spills() {
+    let mut model = table_model(["a", "b", "c"]);
+    model._set("F1", "=XLOOKUP(\"a\",A1:A3,SWITCH(1,1,B1:D3))");
+    model._set("F2", "=XLOOKUP(\"a\",A1:A3,IFS(TRUE,B1:D3))");
+    model._set("F3", "=XLOOKUP(\"a\",A1:A1,IF(TRUE,$B1:D1,C1))");
+    model.evaluate();
+    assert_row(&model, ["F1", "G1", "H1", "I1"], ["10", "11", "12", ""]);
+    assert_row(&model, ["F2", "G2", "H2", "I2"], ["10", "11", "12", ""]);
+    assert_row(&model, ["F3", "G3", "H3", "I3"], ["10", "11", "12", ""]);
+}

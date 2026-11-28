@@ -537,9 +537,16 @@ fn static_analysis_xlookup(args: &[Node]) -> StaticResult {
             return StaticResult::Unknown;
         }
     }
+    // A function can return a range its own analysis calls a scalar (SWITCH, IFS), so only a
+    // constant or one cell is sure to be one.
     let Some((return_rows, return_columns)) = range_spans(return_array) else {
-        return match run_static_analysis_on_node(return_array) {
-            StaticResult::Scalar => StaticResult::Scalar,
+        return match return_array {
+            Node::ReferenceKind { .. }
+            | Node::BooleanKind(_)
+            | Node::NumberKind(_)
+            | Node::StringKind(_)
+            | Node::ErrorKind(_)
+            | Node::EmptyArgKind => StaticResult::Scalar,
             _ => StaticResult::Unknown,
         };
     };
