@@ -324,6 +324,7 @@ pub struct SheetInfo {
     pub id: SheetId,
     pub name: String,
     pub visibility: SheetVisibility,
+    pub color: Option<Rgb>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

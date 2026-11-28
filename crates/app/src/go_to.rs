@@ -85,6 +85,7 @@ mod tests {
             id: SheetId(id),
             name: name.to_string(),
             visibility,
+            color: None,
         }
     }
 

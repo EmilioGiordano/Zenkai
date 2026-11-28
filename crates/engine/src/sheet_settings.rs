@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 
+use ironcalc::base::types::Color;
 use roxmltree::Node;
 
 use crate::carried_moves::{LostKind, MoveTaken, Moves, Restored, Taken};
@@ -222,6 +223,9 @@ impl Indexed {
 #[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub struct SheetSettings {
     pub properties: String,
+    // The sheet's tab color as the model held it when the file was read, by `color_key`: a
+    // save keeps the file's own tabColor element for as long as the model still says that.
+    pub tab_color_read: String,
     pub view: String,
     pub format: Option<String>,
     pub print: String,
@@ -233,6 +237,15 @@ pub struct SheetSettings {
 impl SheetSettings {
     pub fn is_empty(&self) -> bool {
         *self == SheetSettings::default()
+    }
+
+    // `color` is what the model holds now; a color the user changed is written from it, and
+    // one that did not change keeps the element the file had.
+    pub(crate) fn with_tab_color(mut self, color: &Color) -> SheetSettings {
+        if color_key(color) != self.tab_color_read {
+            self.properties = properties_with_tab_color(&self.properties, color);
+        }
+        self
     }
 
     // The width Excel gives a column with no <col>: defaultColWidth, else baseColWidth
@@ -297,6 +310,7 @@ impl SheetSettings {
     pub(crate) fn left_in(&self, remains: Remains) -> SheetSettings {
         SheetSettings {
             properties: self.properties.clone(),
+            tab_color_read: self.tab_color_read.clone(),
             view: self.view.clone(),
             format: self.format.clone(),
             print: self.print.clone(),
@@ -305,6 +319,67 @@ impl SheetSettings {
             elements: self.elements.left_in(remains),
         }
     }
+}
+
+// What a sheet writes for its tab color, with sheets that have no settings of their own
+// getting some only when they have a color.
+pub(crate) fn tab_colored(settings: Option<SheetSettings>, color: &Color) -> Option<SheetSettings> {
+    let settings = settings.unwrap_or_default().with_tab_color(color);
+    (!settings.is_empty()).then_some(settings)
+}
+
+pub(crate) fn color_key(color: &Color) -> String {
+    match color {
+        Color::None => String::new(),
+        Color::Rgb(hex) => hex.to_ascii_uppercase(),
+        Color::Theme(index, tint) => format!("theme:{index}:{tint}"),
+    }
+}
+
+fn tab_color_element(color: &Color) -> String {
+    match color {
+        Color::None => String::new(),
+        Color::Rgb(hex) => hex
+            .strip_prefix('#')
+            .filter(|digits| digits.len() == 6)
+            .and_then(|digits| valid(Value::Hex, digits))
+            .map(|digits| format!("<tabColor rgb=\"FF{}\"/>", digits.to_ascii_uppercase()))
+            .unwrap_or_default(),
+        Color::Theme(index, tint) => {
+            let theme = u32::try_from(*index)
+                .ok()
+                .and_then(|index| valid(Value::Int(0, 11), &index.to_string()));
+            let tint = valid(Value::Real(-1.0, 1.0), &tint.to_string());
+            match (theme, tint) {
+                (Some(theme), Some(tint)) => {
+                    format!("<tabColor theme=\"{theme}\" tint=\"{tint}\"/>")
+                }
+                (Some(theme), None) => format!("<tabColor theme=\"{theme}\"/>"),
+                (None, _) => String::new(),
+            }
+        }
+    }
+}
+
+// `properties` is `<sheetPr>` with the elements `properties()` rebuilt, or empty; every
+// one is self-closing and tabColor comes first, as CT_SheetPr orders them.
+fn properties_with_tab_color(properties: &str, color: &Color) -> String {
+    let inner = properties
+        .strip_prefix("<sheetPr>")
+        .and_then(|rest| rest.strip_suffix("</sheetPr>"))
+        .unwrap_or_default();
+    let others = match inner.find("<tabColor") {
+        Some(start) => match inner[start..].find("/>") {
+            Some(length) => format!("{}{}", &inner[..start], &inner[start + length + 2..]),
+            None => inner[..start].to_string(),
+        },
+        None => inner.to_string(),
+    };
+    let element = tab_color_element(color);
+    if element.is_empty() && others.is_empty() {
+        return String::new();
+    }
+    format!("<sheetPr>{element}{others}</sheetPr>")
 }
 
 // The settings carried for every sheet, by IronCalc's sheet id so they follow a sheet

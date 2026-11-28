@@ -16,7 +16,7 @@ use crate::model::{CachedModel, HistoryStep, content_cells_within, for_each_with
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
-use crate::sheet_settings::{Carried, SheetSettings};
+use crate::sheet_settings::{Carried, SheetSettings, color_key};
 use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, ContentSpan, Contents,
@@ -171,6 +171,9 @@ pub trait Engine: Send {
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError>;
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
     fn move_sheet(&mut self, sheet: SheetId, to: u32) -> Result<(), EngineError>;
+    fn set_sheet_color(&mut self, sheet: SheetId, color: Option<Rgb>) -> Result<(), EngineError>;
+    fn hide_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
+    fn unhide_sheets(&mut self, sheets: &[SheetId]) -> Result<(), EngineError>;
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError>;
 }
 
@@ -937,6 +940,7 @@ impl Engine for Workbook {
                     "veryHidden" => SheetVisibility::VeryHidden,
                     _ => SheetVisibility::Visible,
                 },
+                color: self.resolve(&props.color),
                 name: props.name,
             })
             .collect()
@@ -2023,6 +2027,80 @@ impl Engine for Workbook {
         self.model.move_sheet(sheet.0, to).map_err(rejected)
     }
 
+    fn set_sheet_color(&mut self, sheet: SheetId, color: Option<Rgb>) -> Result<(), EngineError> {
+        let color = color.map_or(Color::None, |rgb| Color::Rgb(format!("#{:06X}", rgb.0)));
+        let unchanged = self
+            .model
+            .get_worksheets_properties()
+            .get(sheet.0 as usize)
+            .is_some_and(|props| props.color == color);
+        if unchanged {
+            return Ok(());
+        }
+        self.model
+            .edit_keeping_cells(|model| model.set_sheet_color(sheet.0, &color))
+            .map_err(rejected)
+            .inspect(|()| self.model.count_style_edit())
+    }
+
+    // A workbook keeps one visible sheet, so the last one is refused. The model also moves
+    // its own selected sheet; the app picks the sheet it shows itself.
+    fn hide_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
+        let states = self.model.get_worksheets_properties();
+        let visible = states
+            .iter()
+            .filter(|props| props.state == "visible")
+            .count();
+        let hidable = states
+            .get(sheet.0 as usize)
+            .is_some_and(|props| props.state == "visible");
+        if !hidable || visible < 2 {
+            return Err(rejected(
+                "a sheet is hidden only while another one stays visible".to_string(),
+            ));
+        }
+        self.model
+            .edit_keeping_cells(|model| model.hide_sheet(sheet.0))
+            .map_err(rejected)
+    }
+
+    // Only sheets that are hidden, never very hidden ones, and all in one undo step.
+    fn unhide_sheets(&mut self, sheets: &[SheetId]) -> Result<(), EngineError> {
+        let mut indices: Vec<u32> = sheets.iter().map(|sheet| sheet.0).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let states = self.model.get_worksheets_properties();
+        let all_hidden = indices.iter().all(|index| {
+            states
+                .get(*index as usize)
+                .is_some_and(|props| props.state == "hidden")
+        });
+        if !all_hidden {
+            return Err(rejected("only hidden sheets can be unhidden".to_string()));
+        }
+        self.model
+            .edit_keeping_cells(|model| {
+                // Paused before the group so closing it does not evaluate: showing a sheet
+                // changes no value, and an evaluation would re-roll volatile formulas.
+                let was_paused = model.is_evaluation_paused();
+                model.pause_evaluation();
+                let unhidden = model.begin_edit_group().and_then(|()| {
+                    let shown = indices
+                        .iter()
+                        .try_for_each(|index| model.unhide_sheet(*index));
+                    shown.and(model.end_edit_group())
+                });
+                if !was_paused {
+                    model.resume_evaluation();
+                }
+                unhidden
+            })
+            .map_err(rejected)
+    }
+
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError> {
         let plan = crate::save::full_plan(self.model.get_model(), &self.carried)?;
         let (xlsx, _) = crate::save::write_full(plan, Cursor::new(Vec::new()))?;
@@ -2332,7 +2410,16 @@ fn carried_by_position(model: &Model<'_>, settings: Vec<SheetSettings>) -> Carri
         );
         return Carried::default();
     }
-    Carried::new(ids.into_iter().zip(settings).collect())
+    let read = model
+        .workbook
+        .worksheets
+        .iter()
+        .zip(settings)
+        .map(|(sheet, settings)| SheetSettings {
+            tab_color_read: color_key(&sheet.color),
+            ..settings
+        });
+    Carried::new(ids.into_iter().zip(read).collect())
 }
 
 #[cfg(test)]

@@ -26,7 +26,7 @@ use crate::saved::{
 };
 use crate::sheet_copy::copied_sheet;
 use crate::sheet_elements::Relationships;
-use crate::sheet_settings::{Carried, SheetSettings};
+use crate::sheet_settings::{Carried, SheetSettings, tab_colored};
 use crate::style_growth::StylesBase;
 
 // IronCalc's rows are written in many small pieces; the settings writer and the deflate
@@ -162,9 +162,12 @@ pub(crate) fn sheet_job(
         .formulas
         .get(index)
         .ok_or_else(|| rejected("a sheet has no formulas"))?;
-    let settings = carried
-        .written(sheet)
-        .map(|settings| settings.left_in(remains));
+    let settings = tab_colored(
+        carried
+            .written(sheet)
+            .map(|settings| settings.left_in(remains)),
+        &sheet.color,
+    );
     let (sheet, formulas) = copied_sheet(sheet, formulas)?;
     Ok(SheetJob {
         part,
