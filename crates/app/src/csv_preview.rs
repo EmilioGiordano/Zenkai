@@ -1,5 +1,6 @@
 mod columns;
 mod controls;
+mod details;
 mod fit;
 mod render;
 mod table;

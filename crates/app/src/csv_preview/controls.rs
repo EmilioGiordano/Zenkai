@@ -74,6 +74,7 @@ pub fn focus_ring(theme: &Theme) -> Div {
         )
 }
 
+pub const DISABLED_OPACITY: f32 = 0.55;
 const BOX: f32 = 16.0;
 
 pub fn checkbox_box(checked: bool, theme: &Theme) -> Div {
