@@ -396,6 +396,37 @@ proptest! {
     }
 }
 
+#[test]
+fn a_damaged_space_between_row_attributes_falls_back() {
+    let path = corpus()
+        .into_iter()
+        .find(|path| path.ends_with("sheet-edges.xlsx"))
+        .unwrap();
+    let last_row = br#"<row r="1048576""#;
+    for byte in [64u8, 83] {
+        let mut parts = parts_of(&path);
+        let sheet = &mut parts
+            .iter_mut()
+            .find(|(name, _)| name == "xl/worksheets/sheet1.xml")
+            .unwrap()
+            .1;
+        let space = sheet
+            .windows(last_row.len() + 1)
+            .position(|window| window.starts_with(last_row) && window.ends_with(b" "))
+            .unwrap()
+            + last_row.len();
+        sheet[space] ^= byte | 1;
+        let bytes = zip_of(&parts);
+        let label = format!("space before spans xor {byte}");
+        assert_agree(&label, &bytes, true);
+        let outcome = compare_readers(&bytes);
+        assert!(
+            matches!(outcome, ReaderComparison::FastDeclined(_)),
+            "{label}: {outcome:#?}"
+        );
+    }
+}
+
 struct Shape {
     sheets: u32,
     rows: u32,
