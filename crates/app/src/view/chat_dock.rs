@@ -59,7 +59,7 @@ impl Workspace {
             ToggleFormulas, ZoomIn, ZoomOut, ZoomReset, Undo, Redo, PasteValues,
             SortAscending, SortDescending, FreezeTopRow, FreezeFirstColumn, FreezePanes,
             InsertRows, DeleteRows, InsertColumns, DeleteColumns, InsertSelection,
-            DeleteSelection, HideRows, UnhideRows,
+            DeleteSelection, HideRows, UnhideRows, AutoFitRowHeight, AutoFitColumnWidth,
             HideColumns, UnhideColumns, AlignLeft, AlignCenter, AlignRight, BordersAll,
             BordersOutside, BorderBottom, BordersNone, ToggleWrapText, IncreaseDecimal,
             DecreaseDecimal, FormatNumber, FormatCurrency, FormatPercent, FormatDate,

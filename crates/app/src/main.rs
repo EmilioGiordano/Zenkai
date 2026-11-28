@@ -23,6 +23,7 @@ mod csv_options;
 mod csv_preview;
 mod csv_save;
 mod decimals;
+mod dialog_focus;
 mod document;
 mod documents;
 mod edit_log;

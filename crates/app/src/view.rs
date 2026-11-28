@@ -19,8 +19,8 @@ use zenkai_grid::{
 };
 use zenkai_i18n::t;
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, NumberFormat, Range, Rgb, SheetId,
-    StyleChange, WorkbookId,
+    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, LineAxis, NumberFormat, Range, Rgb,
+    SheetId, StyleChange, WorkbookId,
 };
 
 mod agent_access;
@@ -38,6 +38,7 @@ mod notices;
 mod pdfs;
 mod save_flow;
 mod settings_gate;
+mod size_dialog;
 mod space_panel;
 mod text_actions;
 mod text_save;
@@ -57,6 +58,7 @@ use zenkai_agent::settings::{HeldChange, PermissionMode};
 use crate::actions::*;
 use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::auto_sum;
+use crate::autofit::{AUTOFIT_CHAR_WIDTH, MAX_AUTOFIT_CELLS, height_of_lines, wrapped_lines};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
@@ -78,6 +80,7 @@ use crate::interface_scale::{self, rem_px};
 use crate::internal_clip::{CopyOutcome, CopyStamp, InternalClip, copy_still_current};
 use crate::jump::jump_target;
 use crate::keymap;
+use crate::line_size::Lines;
 use crate::memory;
 use crate::open_loads::OpenLoads;
 use crate::palette;
@@ -126,6 +129,7 @@ use notices::{Lifetime, Notices, Severity};
 use panels::PanelsState;
 use search::SearchOverlay;
 use sidebar::SidebarState;
+use size_dialog::SizeDialog;
 use theme_picker::ThemePicker;
 
 struct FormulaBarEdit {
@@ -166,8 +170,6 @@ const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
 const CHANGED_FILE_REPLACE: usize = 1;
 const CHANGED_FILE_SAVE_AS: usize = 2;
 const MAX_AUTOSUM_SCAN: usize = 10_000;
-const MAX_AUTOFIT_CELLS: usize = 100_000;
-const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
@@ -221,6 +223,7 @@ pub struct Workspace {
     recent: Vec<PathBuf>,
     recent_saves: Arc<AtomicU64>,
     format_dialog: Option<FormatDialog>,
+    size_dialog: Option<SizeDialog>,
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
@@ -450,6 +453,7 @@ impl Workspace {
             recent: Vec::new(),
             recent_saves: Arc::new(AtomicU64::new(0)),
             format_dialog: None,
+            size_dialog: None,
             generate: None,
             colors,
             focus: cx.focus_handle(),
@@ -1268,7 +1272,14 @@ impl Workspace {
                 let (source, target) = (*source, *target);
                 self.edit(window, cx, move |wb| wb.extend(sheet, source, target));
             }
-            GridEvent::AutoFitRequested(col) => self.auto_fit(*col, window, cx),
+            GridEvent::AutoFitRequested(col) => {
+                let lines = Lines::single(LineAxis::Column, u32::from(col.get()));
+                self.auto_fit(lines, window, cx)
+            }
+            GridEvent::AutoFitRowRequested(row) => {
+                let lines = Lines::single(LineAxis::Row, row.get());
+                self.auto_fit(lines, window, cx)
+            }
             GridEvent::EndRequested { extend } => {
                 let Some(end) = self
                     .documents
@@ -3583,25 +3594,6 @@ impl Workspace {
         });
     }
 
-    // Double-click on a header edge: as wide as the longest displayed text in the column.
-    fn auto_fit(&mut self, col: ColIdx, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(sheet) = self.active_sheet() else {
-            return;
-        };
-        self.edit(window, cx, move |wb| {
-            let longest = wb
-                .filled_cells(sheet)
-                .into_iter()
-                .filter(|pos| pos.col == col)
-                .take(MAX_AUTOFIT_CELLS)
-                .map(|pos| wb.cell(sheet, pos).text.chars().count())
-                .max()
-                .unwrap_or(0);
-            let width = (longest as f32 * AUTOFIT_CHAR_WIDTH + 12.0).clamp(24.0, 600.0);
-            wb.set_column_width(sheet, col, width)
-        });
-    }
-
     fn duplicate_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(sheet) = self.active_sheet() else {
             return;
@@ -4409,6 +4401,26 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseFormatDialog, window, cx| {
                 this.close_format_dialog(window, cx)
             }))
+            .on_action(cx.listener(|this, _: &RowHeight, window, cx| {
+                this.open_size_dialog(LineAxis::Row, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ColumnWidth, window, cx| {
+                this.open_size_dialog(LineAxis::Column, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AutoFitRowHeight, window, cx| {
+                this.auto_fit_selection(LineAxis::Row, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AutoFitColumnWidth, window, cx| {
+                this.auto_fit_selection(LineAxis::Column, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ApplyLineSize, window, cx| {
+                    this.apply_size_dialog(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &CloseLineSizeDialog, window, cx| {
+                this.close_size_dialog(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ConfirmCloseDialog, window, cx| {
                 this.confirm_close_dialog(window, cx)
             }))
@@ -4860,6 +4872,7 @@ impl Render for Workspace {
             .children(self.render_messages(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_size_dialog(window, cx))
             .children(self.render_close_dialog(cx))
             .children(self.render_generate())
             .children(self.render_space_panel(window, cx))
@@ -5011,8 +5024,11 @@ fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
         let entry = needed.entry(pos.col).or_insert(0.0);
         *entry = entry.max(width);
     }
+    let default_width = sizes
+        .default_column_width
+        .unwrap_or(zenkai_types::DEFAULT_COL_WIDTH);
     for (col, width) in needed {
-        if width > zenkai_types::DEFAULT_COL_WIDTH {
+        if width > default_width {
             wb.set_column_width(sheet, col, width)?;
         }
     }
@@ -5034,7 +5050,12 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
             .columns
             .iter()
             .find(|span| span.first <= col && col <= span.last)
-            .map_or(zenkai_types::DEFAULT_COL_WIDTH, |span| span.width)
+            .map_or(
+                sizes
+                    .default_column_width
+                    .unwrap_or(zenkai_types::DEFAULT_COL_WIDTH),
+                |span| span.width,
+            )
     };
     // The tallest wrapped cell sets each row, once.
     let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
@@ -5047,23 +5068,13 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
         if view.kind != zenkai_types::ValueKind::Text {
             continue;
         }
-        let per_line = ((width(pos.col) - 12.0) / AUTOFIT_CHAR_WIDTH).max(1.0);
-        // Breaking at word boundaries wastes part of each line.
-        let lines: f32 = view
-            .text
-            .split('\n')
-            .map(|part| {
-                (part.chars().count() as f32 * 1.3 / per_line)
-                    .ceil()
-                    .max(1.0)
-            })
-            .sum();
+        let lines = wrapped_lines(&view.text, width(pos.col));
         let entry = lines_per_row.entry(pos.row).or_insert(1.0);
-        *entry = entry.max(lines.min(20.0));
+        *entry = entry.max(lines);
     }
     for (row, lines) in lines_per_row {
         if lines > 1.0 {
-            wb.set_row_height(sheet, row, lines * 19.0 + 4.0)?;
+            wb.set_row_height(sheet, row, height_of_lines(lines))?;
         }
     }
     Ok(())
