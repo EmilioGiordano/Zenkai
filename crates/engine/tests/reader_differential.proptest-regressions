@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d3bf51109c64df3af1f3b5a0ce7c47543acd679d1799ec97b473f33dcbc41db5 # shrinks to file = Index(8513881880173639208), damages = [Damage { part: Index(14757395258967641293), at: Index(0), how: 0, token: 0, byte: 0 }]
+cc bd4548a3bd849c2e599e20f1bdd6ce191eec5fe4444449bde2fe5d88260df9ce # shrinks to file = Index(14189803133622732013), damages = [Damage { part: Index(11068046444225730970), at: Index(12744504792810153899), how: 0, token: 0, byte: 64 }]

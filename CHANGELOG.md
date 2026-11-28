@@ -17,6 +17,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   copying `A1:A10` with rows 3 to 5 hidden pastes 7 rows
   ([#339](https://github.com/EmilioGiordano/Zenkai/issues/339)).
 
+### Safety
+
+- A damaged `.xlsx` whose cell markup breaks XML rules, such as attributes run together
+  (`r="A1"t="s"`) or a mismatched `</sheetData>`, is treated like any other damaged file
+  instead of opening as if it were whole, which could drop a cell's type or style
+  ([#348](https://github.com/EmilioGiordano/Zenkai/issues/348)).
+
 ## [0.1.2]
 
 ### Spreadsheet

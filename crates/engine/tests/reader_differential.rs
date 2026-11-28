@@ -396,6 +396,58 @@ proptest! {
     }
 }
 
+#[test]
+fn damaged_sheet_data_tags_fall_back() {
+    let root = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#;
+    let row = r#"<row r="1"><c r="A1"><v>1</v></c></row>"#;
+    for sheet_data in [
+        format!(r#"<sheetData a="1"b="2">{row}</sheetData>"#),
+        r#"<sheetData a="1"b="2"></sheetData>"#.to_string(),
+        r#"<sheetData a="1"b="2"/>"#.to_string(),
+        format!(r#"<sheetData>{row}</sheetData x="1">"#),
+        format!(r#"<sheetData>{row}</x:sheetData>"#),
+    ] {
+        let bytes = workbook(&[&format!("{root}{sheet_data}</worksheet>")], None);
+        assert_agree(&sheet_data, &bytes, true);
+        let outcome = compare_readers(&bytes);
+        assert!(
+            matches!(outcome, ReaderComparison::FastDeclined(_)),
+            "{sheet_data}: {outcome:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_damaged_space_between_row_attributes_falls_back() {
+    let path = corpus()
+        .into_iter()
+        .find(|path| path.ends_with("sheet-edges.xlsx"))
+        .unwrap();
+    let last_row = br#"<row r="1048576""#;
+    for byte in [64u8, 83] {
+        let mut parts = parts_of(&path);
+        let sheet = &mut parts
+            .iter_mut()
+            .find(|(name, _)| name == "xl/worksheets/sheet1.xml")
+            .unwrap()
+            .1;
+        let space = sheet
+            .windows(last_row.len() + 1)
+            .position(|window| window.starts_with(last_row) && window.ends_with(b" "))
+            .unwrap()
+            + last_row.len();
+        sheet[space] ^= byte | 1;
+        let bytes = zip_of(&parts);
+        let label = format!("space before spans xor {byte}");
+        assert_agree(&label, &bytes, true);
+        let outcome = compare_readers(&bytes);
+        assert!(
+            matches!(outcome, ReaderComparison::FastDeclined(_)),
+            "{label}: {outcome:#?}"
+        );
+    }
+}
+
 struct Shape {
     sheets: u32,
     rows: u32,
