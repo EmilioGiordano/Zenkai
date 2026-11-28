@@ -79,6 +79,7 @@ pub(crate) fn stream_worksheet<R: Read>(
     };
     let (qname, prefixes) = sheet_tags(&pump.head[..content])?;
     let prefix = pump.head[..tag].to_vec();
+    let opening = pump.head[tag..content].to_vec();
     pump.head.drain(..content);
     pump.pos = 0;
     let driver = Driver {
@@ -91,8 +92,12 @@ pub(crate) fn stream_worksheet<R: Read>(
     let rowtags: Vec<u8> = Vec::new();
     let cut = match pump.peek()? {
         (Next::SheetDataEnd, end) => {
+            let event = &pump.window()[..end];
+            let closing = event[blank_prefix_len(event)..].to_vec();
             pump.pos += end;
-            return Ok(assembled(prefix, qname, rowtags, pump.rest()?, driver));
+            let tail = pump.rest()?;
+            let tags = [opening.as_slice(), closing.as_slice()];
+            return Ok(assembled(prefix, qname, tags, rowtags, tail, driver));
         }
         (Next::Other, _) => {
             return Err(unsupported("something other than a row in sheetData"));
@@ -112,7 +117,7 @@ pub(crate) fn stream_worksheet<R: Read>(
         names,
         budgets,
     };
-    let (tail, driver, rowtags) = std::thread::scope(|scope| {
+    let ((closing, tail), driver, rowtags) = std::thread::scope(|scope| {
         let mut units = Units {
             driver,
             rowtags,
@@ -125,7 +130,8 @@ pub(crate) fn stream_worksheet<R: Read>(
         }
         tail.map(|tail| (tail, units.driver, units.rowtags))
     })?;
-    Ok(assembled(prefix, qname, rowtags, tail, driver))
+    let tags = [opening.as_slice(), closing.as_slice()];
+    Ok(assembled(prefix, qname, tags, rowtags, tail, driver))
 }
 
 // Why the reading of units stopped. An error from the source comes after the units cut
@@ -171,9 +177,9 @@ impl Units<'_, '_> {
         }
     }
 
-    // The tail of the sheet once every unit before it is in, or the first error in
+    // The end of the sheet once every unit before it is in, or the first error in
     // document order: a unit's own, or the source's after the units before it.
-    fn settle(&mut self, read: Result<Vec<u8>, Halt>) -> Result<Vec<u8>, ReadError> {
+    fn settle<T>(&mut self, read: Result<T, Halt>) -> Result<T, ReadError> {
         match read {
             Ok(tail) => self.drain().map(|()| tail),
             Err(Halt::Unit(error)) => Err(error),
@@ -185,13 +191,13 @@ impl Units<'_, '_> {
     }
 }
 
-// Every unit of rows up to the end of sheetData, then the bytes after it.
+// Every unit of rows up to the end of sheetData, then its end tag and the bytes after it.
 fn read_units<R: Read>(
     pump: &mut Pump<'_, R>,
     units: &mut Units<'_, '_>,
     cut: &[u8],
     tuning: Tuning,
-) -> Result<Vec<u8>, Halt> {
+) -> Result<(Vec<u8>, Vec<u8>), Halt> {
     loop {
         while !pump.eof && pump.window().len() < tuning.piece_bytes + tuning.cut_margin {
             pump.fill()?;
@@ -202,8 +208,9 @@ fn read_units<R: Read>(
         if let Some((rel, end)) = find_end_tag(pump.window()) {
             let start = pump.pos;
             units.unit(cut, &pump.head[start..start + rel])?;
+            let closing = pump.head[start + rel..start + end].to_vec();
             pump.pos = start + end;
-            return Ok(pump.rest()?);
+            return Ok((closing, pump.rest()?));
         }
         match find_cut(pump.window(), cut) {
             Some(at) if at > 0 => {
@@ -335,18 +342,21 @@ impl<'b, R: Read> Pump<'b, R> {
     }
 }
 
+// The stub keeps the <sheetData> start and end tags as the file wrote them: the row
+// parser never reads them, so IronCalc's parser must, or it would refuse a file this
+// reader opens.
 fn assembled(
     prefix: Vec<u8>,
     qname: Vec<u8>,
+    [opening, closing]: [&[u8]; 2],
     rowtags: Vec<u8>,
     mut tail: Vec<u8>,
     driver: Driver,
 ) -> StreamedSheet {
-    let mut stub = Vec::with_capacity(prefix.len() + qname.len() + 3 + tail.len());
+    let mut stub = Vec::with_capacity(prefix.len() + opening.len() + closing.len() + tail.len());
     stub.extend_from_slice(&prefix);
-    stub.extend_from_slice(b"<");
-    stub.extend_from_slice(&qname);
-    stub.extend_from_slice(b"/>");
+    stub.extend_from_slice(opening);
+    stub.extend_from_slice(closing);
     stub.extend_from_slice(&tail);
     let mut head = Vec::with_capacity(prefix.len() + rowtags.len() + qname.len() * 2 + 8);
     head.extend_from_slice(&prefix);
@@ -1809,8 +1819,51 @@ mod tests {
         assert_eq!(streamed.cells.jobs.len(), 1);
         let stub = String::from_utf8(streamed.stub).unwrap();
         assert!(stub.contains("<sheetView"), "{stub}");
-        assert!(stub.contains("<sheetData/>"), "{stub}");
+        assert!(stub.contains("<sheetData></sheetData>"), "{stub}");
         assert!(!stub.contains("<row"), "{stub}");
+    }
+
+    #[test]
+    fn the_sheet_data_tags_reach_ironcalc_as_the_file_wrote_them() {
+        let root = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#;
+        let row = r#"<row r="1"><c r="A1"><v>1</v></c></row>"#;
+        for (sheet_data, well_formed) in [
+            (format!(r#"<sheetData a="1"b="2">{row}</sheetData>"#), false),
+            (r#"<sheetData a="1"b="2"></sheetData>"#.to_string(), false),
+            (r#"<sheetData a="1"b="2"/>"#.to_string(), false),
+            (format!(r#"<sheetData>{row}</sheetData x="1">"#), false),
+            (format!(r#"<sheetData>{row}</x:sheetData>"#), false),
+            (format!(r#"<sheetData a="1" >{row}</sheetData >"#), true),
+        ] {
+            let xml = format!("{root}{sheet_data}</worksheet>");
+            assert_eq!(
+                roxmltree::Document::parse(&xml).is_ok(),
+                well_formed,
+                "{xml}"
+            );
+            for workers in [0, 2] {
+                let tuning = Tuning {
+                    workers,
+                    ..Tuning::production(0)
+                };
+                let stub = String::from_utf8(stream_tuned(&xml, tuning).unwrap().stub).unwrap();
+                assert_eq!(
+                    roxmltree::Document::parse(&stub).is_ok(),
+                    well_formed,
+                    "{stub}"
+                );
+            }
+            let bytes = crate::test_sheets::workbook_with_sheets(&[xml.into_bytes()]);
+            let read = crate::read_xlsx(&bytes, "b", "en", "UTC", &|_, _| Ok(()));
+            if well_formed {
+                assert!(read.is_ok(), "{sheet_data}");
+            } else {
+                assert!(
+                    matches!(read, Err(ReadError::Unreadable(_))),
+                    "{sheet_data}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1827,7 +1880,7 @@ mod tests {
         let streamed = stream(&xml);
         assert!(streamed.cells.data.is_empty());
         let stub = String::from_utf8(streamed.stub).unwrap();
-        assert!(stub.contains("<sheetData/>"), "{stub}");
+        assert!(stub.contains("<sheetData></sheetData>"), "{stub}");
         assert!(!stub.contains("<row"), "{stub}");
     }
 
