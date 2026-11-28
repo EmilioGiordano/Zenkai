@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
@@ -205,6 +205,7 @@ pub struct Workspace {
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
     visible_mark: VisibleMark,
+    copy_request: u64,
     chart: Option<ChartPanel>,
     palette: Option<Entity<CommandState>>,
     search: Option<SearchOverlay>,
@@ -436,6 +437,7 @@ impl Workspace {
             diagnostics: false,
             clipboard_source: None,
             visible_mark: VisibleMark::default(),
+            copy_request: 0,
             chart: None,
             palette: None,
             search: None,
@@ -1341,6 +1343,8 @@ impl Workspace {
         let Some(document) = self.documents.get_mut(id) else {
             return false;
         };
+        // A copy still running describes cells this edit is about to change.
+        self.copy_request += 1;
         if document.queue_user_edit(Box::new(edit)).is_err() {
             self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
             return false;
@@ -2638,27 +2642,87 @@ impl Workspace {
 
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
         let range = self.selection(cx);
-        let scope = self.visible_mark.copy_scope(range);
+        let scope = self.visible_mark.copy_scope();
         let shape = CopyShape::of(range, scope, self.grid.read(cx).layout());
-        if shape.is_empty() {
-            self.notify(Severity::Info, t!("notice.no_cells_found"), cx);
-            return;
-        }
         let Some(document) = self.documents.active() else {
             return;
         };
         let sheet = document.sheet;
+        // Several rectangles are several engine copies: they run off the UI thread.
+        if shape.block_count() > 1 {
+            self.copy_in_background(range, shape, cut, cx);
+            return;
+        }
         let outcome = document
             .workbook_mut()
             .map(|mut workbook| InternalClip::copy(&mut workbook, sheet, range, shape, cut));
+        self.finish_copy(outcome, range, cx);
+    }
+
+    fn copy_in_background(
+        &mut self,
+        range: Range,
+        shape: CopyShape,
+        cut: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document) = self.documents.active() else {
+            return;
+        };
+        let Some(shared) = document.begin_read() else {
+            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
+            return;
+        };
+        let (id, sheet, generation) = (document.id, document.sheet, document.generation());
+        self.copy_request += 1;
+        let request = self.copy_request;
+        self.start_long_job(LongJob::Calculating, cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut workbook = shared.write().unwrap_or_else(PoisonError::into_inner);
+                    InternalClip::copy(&mut workbook, sheet, range, shape, cut)
+                })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                this.end_long_job(LongJob::Calculating, cx);
+                let current = this.documents.active_id() == Some(id)
+                    && this
+                        .documents
+                        .get(id)
+                        .is_some_and(|document| document.is_current(generation));
+                if current && this.copy_request == request {
+                    this.finish_copy(Some(outcome), range, cx);
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during a copy");
+            }
+        })
+        .detach();
+    }
+
+    fn finish_copy(
+        &mut self,
+        outcome: Option<Result<CopyOutcome, EngineError>>,
+        range: Range,
+        cx: &mut Context<Self>,
+    ) {
         match outcome {
             None => self.notify(Severity::Warning, t!("notice.still_calculating"), cx),
+            Some(Ok(CopyOutcome::NoCells)) => {
+                self.notify(Severity::Info, t!("notice.no_cells_found"), cx);
+            }
             Some(Ok(CopyOutcome::TooLarge)) => {
                 self.notify(
                     Severity::Warning,
                     t!("notice.selection_too_large_to_copy"),
                     cx,
                 );
+            }
+            Some(Ok(CopyOutcome::TooManyAreas)) => {
+                self.notify(Severity::Warning, t!("notice.copy_too_many_areas"), cx);
             }
             Some(Ok(CopyOutcome::CutNeedsOneArea)) => {
                 self.notify(Severity::Warning, t!("notice.cut_needs_one_area"), cx);
@@ -2684,7 +2748,7 @@ impl Workspace {
             self.notify(Severity::Info, t!("notice.no_cells_found"), cx);
             return;
         }
-        self.visible_mark.set(selection);
+        self.visible_mark.set();
     }
 
     fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2696,6 +2760,14 @@ impl Workspace {
         };
         let origin = self.grid.read(cx).selection().active;
         let internal = self.clipboard_source.take_if(|clip| clip.text == text);
+        if internal
+            .as_ref()
+            .is_some_and(|clip| clip.runs_past_the_edge_at(origin))
+        {
+            self.clipboard_source = internal;
+            self.notify(Severity::Warning, t!("notice.paste_past_sheet_edge"), cx);
+            return;
+        }
         let (height, width) = match &internal {
             Some(clip) => (clip.shape.row_count(), clip.shape.col_count()),
             None => {
