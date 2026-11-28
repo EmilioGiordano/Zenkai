@@ -486,6 +486,92 @@ fn static_analysis_index(_args: &[Node]) -> StaticResult {
     StaticResult::Unknown
 }
 
+#[derive(PartialEq)]
+enum Span {
+    One,
+    Many,
+    // One end is absolute and the other relative, so it depends on the cell.
+    Varies,
+}
+
+fn span(start: i32, absolute_start: bool, end: i32, absolute_end: bool) -> Span {
+    if absolute_start != absolute_end {
+        Span::Varies
+    } else if start == end {
+        Span::One
+    } else {
+        Span::Many
+    }
+}
+
+fn range_spans(node: &Node) -> Option<(Span, Span)> {
+    match node {
+        Node::RangeKind {
+            row1,
+            column1,
+            row2,
+            column2,
+            absolute_row1,
+            absolute_column1,
+            absolute_row2,
+            absolute_column2,
+            ..
+        } => Some((
+            span(*row1, *absolute_row1, *row2, *absolute_row2),
+            span(*column1, *absolute_column1, *column2, *absolute_column2),
+        )),
+        _ => None,
+    }
+}
+
+// A function can return a range its own analysis calls a scalar (SWITCH, IFS), so only a
+// constant or one cell is sure to be one.
+fn is_one_cell_or_constant(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::ReferenceKind { .. }
+            | Node::BooleanKind(_)
+            | Node::NumberKind(_)
+            | Node::StringKind(_)
+            | Node::ErrorKind(_)
+            | Node::EmptyArgKind
+    )
+}
+
+/// XLOOKUP returns the row of return_array at the match for a lookup_array that is a column,
+/// and the column for one that is a row, or if_not_found, so it is a scalar only when both are
+/// sure to be one cell. A plain formula cell cannot hold more than one value, so any shape not
+/// known here (a name, a table, a function, a range whose ends mix `$`) is Unknown, as INDEX is.
+fn static_analysis_xlookup(args: &[Node]) -> StaticResult {
+    let Some(return_array) = args.get(2) else {
+        return StaticResult::Scalar;
+    };
+    if args
+        .get(3)
+        .is_some_and(|if_not_found| !is_one_cell_or_constant(if_not_found))
+    {
+        return StaticResult::Unknown;
+    }
+    let Some((return_rows, return_columns)) = range_spans(return_array) else {
+        return if is_one_cell_or_constant(return_array) {
+            StaticResult::Scalar
+        } else {
+            StaticResult::Unknown
+        };
+    };
+    // A one-cell lookup_array returns a whole row or column of return_array.
+    let is_scalar = match args.get(1).and_then(range_spans) {
+        Some((Span::Many, Span::One)) => return_columns == Span::One,
+        Some((Span::One, Span::Many)) => return_rows == Span::One,
+        _ => return_rows == Span::One && return_columns == Span::One,
+    };
+    if is_scalar {
+        StaticResult::Scalar
+    } else {
+        StaticResult::Unknown
+    }
+}
+
 #[derive(Clone)]
 enum Signature {
     Scalar,
@@ -1713,7 +1799,7 @@ fn static_analysis_on_function(kind: &Function, args: &[Node]) -> StaticResult {
         Function::Vstack => StaticResult::Unknown,
         Function::Wrapcols => StaticResult::Unknown,
         Function::Wraprows => StaticResult::Unknown,
-        Function::Xlookup => not_implemented(args),
+        Function::Xlookup => static_analysis_xlookup(args),
         Function::Xmatch => not_implemented(args),
         Function::Trimrange => StaticResult::Unknown,
         Function::Sort => StaticResult::Unknown,

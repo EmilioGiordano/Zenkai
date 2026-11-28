@@ -7,6 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Spreadsheet
+
+- XLOOKUP with a return range of several columns (or rows) spills the matching row (or
+  column), as Excel does, instead of `#VALUE!` ([#334](https://github.com/EmilioGiordano/Zenkai/issues/334)).
+- A spilling formula that uses `@`, such as `=B1:B3+@C1:E1`, keeps the `@` when the file is
+  saved instead of reopening without it.
+
 ## [0.1.2]
 
 ### Spreadsheet

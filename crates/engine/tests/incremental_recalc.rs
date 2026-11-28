@@ -105,6 +105,10 @@ fn exact_lookup() -> impl Strategy<Value = String> {
         2 => cell().prop_map(|a| format!("=VLOOKUP({a},$A$1:$C$6,3,FALSE)")),
         2 => cell().prop_map(|a| format!("=MATCH({a},Sheet2!$B$1:$B$6,0)")),
         2 => cell().prop_map(|a| format!("=XLOOKUP({a},$A$1:$A$6,$D$1:$D$6,\"none\",0,-1)")),
+        2 => cell().prop_map(|a| format!("=XLOOKUP({a},$A$1:$A$6,$C$1:$D$6,\"none\")")),
+        1 => cell().prop_map(|a| {
+            format!("=XLOOKUP({a},Sheet2!$A$1:$D$1,Sheet2!$A$2:$D$3,\"none\",0,-1)")
+        }),
         1 => cell().prop_map(|a| format!("=HLOOKUP({a},Sheet2!$A$1:$D$2,2,FALSE)")),
     ]
 }
