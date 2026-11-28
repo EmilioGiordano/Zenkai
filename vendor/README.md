@@ -516,6 +516,16 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `Error parsing workbook: ` prefix, since bitcode replaces its reason with `bitcode error`
   without debug assertions, so the test failed under `cargo test --release`. Stands on its own.
 - Date and time formats accept fractional seconds (`.0`, `.00`, `.000`) after a seconds token, rounding the serial to that precision with carry and using the locale decimal separator (`src/formatter/parser.rs`, `src/formatter/format.rs`; tests in `src/formatter/test/test_time.rs`). Stands on its own.
+- XLOOKUP returns the row of return_array at the match for a lookup_array that is a column,
+  and the column for one that is a row, as a reference the way INDEX does, so a return_array
+  of several columns (or rows) spills it as in Excel instead of giving `#VALUE!`; return_array
+  must still have as many rows (or columns) as lookup_array. A one-cell lookup_array returns a
+  one-row return_array whole, as for a table with one row. A typed XLOOKUP is stored as a
+  dynamic formula only when its return_array is a range that can give more than one cell, so
+  a single-value one stays a plain formula, as Excel writes it (`src/functions/xlookup.rs`,
+  `static_analysis_xlookup` in `src/expressions/parser/static_analysis.rs`). Applies on top of
+  the lookup index patch, whose code it shares; its tests use `Cell::dynamic_range` from the
+  `CellStore` patch. Tests: `src/test/lookup_and_reference/test_fn_xlookup.rs`.
 
 Zenkai-only, not for upstream:
 
