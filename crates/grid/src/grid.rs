@@ -161,6 +161,13 @@ struct EdgeDrag {
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
+// The AutoComplete list has a fixed size per row, so its height is known when it is placed.
+const SUGGESTION_WIDTH: f32 = 320.0;
+const SUGGESTION_ROW_HEIGHT: f32 = 20.0;
+const SUGGESTION_HINT_HEIGHT: f32 = 24.0;
+const SUGGESTION_HINT_GAP: f32 = 4.0;
+// Border and vertical padding of the list.
+const SUGGESTION_FRAME_HEIGHT: f32 = 10.0;
 
 pub struct Grid {
     label: SharedString,
@@ -1287,12 +1294,34 @@ impl Grid {
         let name = suggestions[highlighted];
         let signature =
             autocomplete::arguments(name).map(|arguments| format!("{name}({arguments})"));
+        let hint_height = if signature.is_some() {
+            SUGGESTION_HINT_HEIGHT + SUGGESTION_HINT_GAP
+        } else {
+            0.0
+        };
+        let height = SUGGESTION_FRAME_HEIGHT
+            + SUGGESTION_ROW_HEIGHT * suggestions.len() as f32
+            + hint_height;
+        let width = SUGGESTION_WIDTH * self.zoom;
+        let (view_width, view_height) = (
+            f32::from(self.bounds.size.width),
+            f32::from(self.bounds.size.height),
+        );
+        let list_left = (left * self.zoom).min((view_width - width).max(0.0));
+        let below = bottom * self.zoom + 2.0;
+        let cell_top = (bottom - self.layout.row_height(editor.pos.row)) * self.zoom;
+        let above = cell_top - 2.0 - height;
+        let list_top = if below + height > view_height && above >= 0.0 {
+            above
+        } else {
+            below
+        };
         Some(
             div()
                 .absolute()
-                .left(px(left * self.zoom))
-                .top(px(bottom * self.zoom + 2.0))
-                .w(px(320.0))
+                .left(px(list_left))
+                .top(px(list_top))
+                .w(px(width))
                 .py_1()
                 .bg(theme.popover)
                 .border_1()
@@ -1303,6 +1332,7 @@ impl Grid {
                 .text_color(theme.popover_foreground)
                 .children(suggestions.into_iter().enumerate().map(|(index, name)| {
                     div()
+                        .h(px(SUGGESTION_ROW_HEIGHT))
                         .px_2()
                         .when(index == highlighted, |row| {
                             row.bg(theme.accent).text_color(theme.accent_foreground)
@@ -1311,13 +1341,15 @@ impl Grid {
                 }))
                 .children(signature.map(|signature| {
                     div()
-                        .mt_1()
+                        .mt(px(SUGGESTION_HINT_GAP))
+                        .h(px(SUGGESTION_HINT_HEIGHT))
                         .px_2()
                         .pt_1()
                         .border_t_1()
                         .border_color(theme.border)
                         .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_color(theme.popover_foreground)
+                        .truncate()
                         .child(signature)
                 })),
         )
