@@ -301,6 +301,33 @@ pub fn defaults() -> Vec<Binding> {
         bind("shift-tab", FocusPreviousControl, Some("GenerateDialog")),
         bind("ctrl-j", ToggleAgentChat, CONTEXT),
         bind("ctrl-shift-l", FocusAgentChat, CONTEXT),
+        bind("ctrl-alt-j", FocusAgentChat, CONTEXT),
+        bind("ctrl-shift-l", ToggleAutoFilter, GRID),
+        bind("alt-down", OpenFilterList, GRID),
+        bind("escape", CloseFilterList, Some("FilterList")),
+        bind("escape", CloseFilterList, Some("FilterList > Input")),
+        bind("alt-up", CloseFilterList, Some("FilterList")),
+        bind("alt-up", CloseFilterList, Some("FilterList > Input")),
+        bind("escape", CancelFilter, Some("Workspace && Filtering")),
+        bind("up", FilterListUp, Some("FilterList")),
+        bind("up", FilterListUp, Some("FilterList > Input")),
+        bind("down", FilterListDown, Some("FilterList")),
+        bind("down", FilterListDown, Some("FilterList > Input")),
+        bind("home", FilterListHome, Some("FilterRows")),
+        bind("end", FilterListEnd, Some("FilterRows")),
+        bind("pageup", FilterListPageUp, Some("FilterRows")),
+        bind("pagedown", FilterListPageDown, Some("FilterRows")),
+        bind("space", FilterListToggle, Some("FilterRows")),
+        bind("enter", FilterListConfirm, Some("FilterList")),
+        bind("enter", FilterListConfirm, Some("FilterList > Input")),
+        bind("tab", FilterListNextStop, Some("FilterList")),
+        bind("tab", FilterListNextStop, Some("FilterList > Input")),
+        bind("shift-tab", FilterListPreviousStop, Some("FilterList")),
+        bind(
+            "shift-tab",
+            FilterListPreviousStop,
+            Some("FilterList > Input"),
+        ),
         bind("ctrl-alt-w", CycleChatLayout, CONTEXT),
         bind("ctrl-alt-f", ToggleChatFullWindow, CONTEXT),
         bind("ctrl-alt-right", WidenSidebar, CONTEXT),
@@ -354,7 +381,19 @@ pub fn defaults() -> Vec<Binding> {
     ]
     .into_iter()
     .flatten()
+    .chain(macos_defaults())
     .collect()
+}
+
+// Excel for Mac turns the filter on and off with Cmd+Shift+F.
+fn macos_defaults() -> Vec<Binding> {
+    if cfg!(target_os = "macos") {
+        bind("cmd-shift-f", ToggleAutoFilter, GRID)
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -369,7 +408,7 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("        bind("))
             .count();
-        assert_eq!(defaults().len(), written);
+        assert_eq!(defaults().len(), written + macos_defaults().len());
     }
 
     #[test]
@@ -498,6 +537,115 @@ mod tests {
         assert!(bound("alt-enter", &InsertLineBreak));
         assert!(bound("enter", &ConfirmDown));
         assert!(bound("ctrl-end", &SheetEnd));
+    }
+
+    fn bound_to(chord: &str, context: &str) -> Option<&'static str> {
+        defaults()
+            .into_iter()
+            .find(|binding| binding.chord.as_str() == chord && binding.context == Some(context))
+            .map(|binding| binding.action.name())
+    }
+
+    #[test]
+    fn ctrl_shift_l_filters_in_the_grid_and_still_focuses_the_chat_elsewhere() {
+        assert_eq!(
+            bound_to("ctrl-shift-l", "Grid"),
+            Some(<ToggleAutoFilter as Action>::name_for_type())
+        );
+        assert_eq!(
+            bound_to("ctrl-shift-l", "Workspace"),
+            Some(<FocusAgentChat as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn the_chat_also_answers_to_ctrl_alt_j_in_every_context() {
+        assert_eq!(
+            bound_to("ctrl-alt-j", "Workspace"),
+            Some(<FocusAgentChat as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn alt_down_opens_the_filter_list_and_alt_up_or_escape_close_it() {
+        assert_eq!(
+            bound_to("alt-down", "Grid"),
+            Some(<OpenFilterList as Action>::name_for_type())
+        );
+        let close = Some(<CloseFilterList as Action>::name_for_type());
+        assert_eq!(bound_to("alt-up", "FilterList"), close);
+        assert_eq!(bound_to("escape", "FilterList"), close);
+        assert_eq!(bound_to("escape", "FilterList > Input"), close);
+    }
+
+    #[test]
+    fn escape_cancels_a_filter_being_applied_only_in_the_filtering_context() {
+        assert_eq!(
+            bound_to("escape", "Workspace && Filtering"),
+            Some(<CancelFilter as Action>::name_for_type())
+        );
+        assert_eq!(
+            bound_to("escape", "Workspace"),
+            Some(<DismissNotice as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn the_filter_list_keys_reach_their_actions_from_the_list_and_from_search() {
+        for context in ["FilterList", "FilterList > Input"] {
+            assert_eq!(
+                bound_to("up", context),
+                Some(<FilterListUp as Action>::name_for_type())
+            );
+            assert_eq!(
+                bound_to("down", context),
+                Some(<FilterListDown as Action>::name_for_type())
+            );
+            assert_eq!(
+                bound_to("enter", context),
+                Some(<FilterListConfirm as Action>::name_for_type())
+            );
+            assert_eq!(
+                bound_to("tab", context),
+                Some(<FilterListNextStop as Action>::name_for_type())
+            );
+            assert_eq!(
+                bound_to("shift-tab", context),
+                Some(<FilterListPreviousStop as Action>::name_for_type())
+            );
+        }
+        assert_eq!(
+            bound_to("space", "FilterRows"),
+            Some(<FilterListToggle as Action>::name_for_type())
+        );
+        assert_eq!(
+            bound_to("home", "FilterRows"),
+            Some(<FilterListHome as Action>::name_for_type())
+        );
+        assert_eq!(
+            bound_to("end", "FilterRows"),
+            Some(<FilterListEnd as Action>::name_for_type())
+        );
+        assert_eq!(
+            bound_to("pageup", "FilterRows"),
+            Some(<FilterListPageUp as Action>::name_for_type())
+        );
+        assert_eq!(
+            bound_to("pagedown", "FilterRows"),
+            Some(<FilterListPageDown as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn macos_turns_the_filter_on_with_cmd_shift_f() {
+        let bindings: Vec<Binding> = bind("cmd-shift-f", ToggleAutoFilter, GRID)
+            .into_iter()
+            .collect();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(
+            macos_defaults().len(),
+            usize::from(cfg!(target_os = "macos"))
+        );
     }
 
     #[test]
