@@ -92,7 +92,7 @@ use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::{SaveOrder, Session};
-use crate::sheet_tabs;
+use crate::sheet_tabs::{self, StripTab};
 use crate::sidebar_item::human_size;
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
@@ -100,7 +100,6 @@ use crate::stale_view::StaleRequest;
 use crate::start_view;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::tab_color_card::TabColorCard;
-use crate::tab_colors;
 use crate::theme;
 use crate::toolbar;
 use crate::unhide_dialog::UnhideDialog;
@@ -230,6 +229,8 @@ pub struct Workspace {
     format_dialog: Option<FormatDialog>,
     tab_color: Option<TabColorCard>,
     unhide: Option<UnhideDialog>,
+    // A dialog closed without a window at hand, so the next frame gives the grid focus back.
+    refocus_grid: bool,
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
@@ -461,6 +462,7 @@ impl Workspace {
             format_dialog: None,
             tab_color: None,
             unhide: None,
+            refocus_grid: false,
             generate: None,
             colors,
             focus: cx.focus_handle(),
@@ -1425,6 +1427,8 @@ impl Workspace {
                     return;
                 }
                 let lossy_changed = lossy_state(document) != lossy_before;
+                let sheets_version = document.sheets_version();
+                let left_hidden = document.take_left_hidden();
                 document.revalidate_review();
                 if let Some(target) = pending_sheet
                     && errors.is_empty()
@@ -1438,6 +1442,14 @@ impl Workspace {
                     this.wait_for_workbook(id, cx);
                 }
                 this.last_recalc = Some(started.elapsed());
+                this.close_sheet_dialogs_gone_stale(generation, sheets_version);
+                if let Some(name) = left_hidden {
+                    this.notify(
+                        Severity::Info,
+                        t!("notice.hidden_sheet_left", name = name),
+                        cx,
+                    );
+                }
                 if let Some(error) = errors.first() {
                     this.notify(Severity::Error, error.to_string(), cx);
                 }
@@ -2877,7 +2889,7 @@ impl Workspace {
         let Some(document) = self.documents.active_mut() else {
             return;
         };
-        if sheet.0 as usize >= document.sheets.len() || sheet == document.sheet {
+        if sheet == document.sheet || !document.is_shown(sheet) {
             return;
         }
         document.sheet = sheet;
@@ -3051,55 +3063,38 @@ impl Workspace {
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
         let active = self.documents.active();
-        let sheets = active.map_or(&[][..], |document| document.sheets.as_slice());
-        let strip = sheet_tabs::shown(sheets);
-        let strip_for_click = strip.clone();
-        let (can_hide, can_unhide) = (
-            sheet_tabs::can_hide(sheets),
-            !sheet_tabs::hidden(sheets).is_empty(),
-        );
+        let strip: &[StripTab] = active.map_or(&[][..], |document| document.strip());
+        let strip_ids: Vec<SheetId> = strip.iter().map(|tab| tab.id).collect();
+        let (can_hide, can_unhide) = active.map_or((false, false), |document| {
+            (
+                sheet_tabs::can_hide(&document.sheets, document.sheet),
+                document.has_hidden_sheets(),
+            )
+        });
         let bar_edge = theme.muted_foreground;
-        let tabs = strip
-            .iter()
-            .filter_map(|id| sheets.iter().find(|sheet| sheet.id == *id))
-            .map(|sheet| {
-                let entity = entity.clone();
-                let id = sheet.id;
-                let hidden_mark = sheet_tabs::is_shown_hidden(sheets, id);
-                let name = if hidden_mark {
-                    format!("{} {}", sheet.name, t!("sheet.hidden_mark"))
-                } else {
-                    sheet.name.clone()
-                };
-                let described = match sheet.color {
-                    Some(color) => t!(
-                        "sheet.tab_color_aria",
-                        name = name,
-                        color = tab_colors::Swatch::of(color)
-                            .map_or_else(|| tab_colors::hex(color), tab_colors::Swatch::name)
-                    ),
-                    None => name.clone(),
-                };
-                // Excel activates a tab on right click, so its menu acts on that sheet.
-                let tab = Tab::new()
-                    .label(sheet.name.clone())
-                    .aria_label(described)
-                    .on_mouse_down(MouseButton::Right, move |_, window, cx| {
-                        if let Err(error) =
-                            entity.update(cx, |this, cx| this.switch_sheet(id, window, cx))
-                        {
-                            tracing::debug!(%error, "workspace dropped");
-                        }
-                    })
-                    .when(hidden_mark, |tab| {
-                        tab.italic()
-                            .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
-                    });
-                match sheet.color {
-                    Some(color) => tab.child(color_bar(color, bar_edge)),
-                    None => tab,
-                }
-            });
+        let tabs = strip.iter().map(|shown| {
+            let entity = entity.clone();
+            let id = shown.id;
+            // Excel activates a tab on right click, so its menu acts on that sheet.
+            let tab = Tab::new()
+                .label(shown.label.clone())
+                .aria_label(shown.description.clone())
+                .on_mouse_down(MouseButton::Right, move |_, window, cx| {
+                    if let Err(error) =
+                        entity.update(cx, |this, cx| this.switch_sheet(id, window, cx))
+                    {
+                        tracing::debug!(%error, "workspace dropped");
+                    }
+                })
+                .when_some(shown.tooltip.clone(), |tab, tooltip| {
+                    tab.italic()
+                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                });
+            match shown.color {
+                Some(color) => tab.child(color_bar(color, bar_edge)),
+                None => tab,
+            }
+        });
         h_flex()
             .h(rem_px(32.0))
             .items_center()
@@ -3115,12 +3110,12 @@ impl Workspace {
                             .selected_index(
                                 active
                                     .and_then(|document| {
-                                        strip.iter().position(|id| *id == document.sheet)
+                                        strip.iter().position(|tab| tab.id == document.sheet)
                                     })
                                     .unwrap_or(0),
                             )
                             .on_click(move |index, window, cx| {
-                                let Some(sheet) = strip_for_click.get(*index).copied() else {
+                                let Some(sheet) = strip_ids.get(*index).copied() else {
                                     return;
                                 };
                                 if let Err(error) = entity.update(cx, |this, cx| {
@@ -4257,6 +4252,10 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        if std::mem::take(&mut self.refocus_grid) {
+            let focus = self.grid.focus_handle(cx);
+            window.focus(&focus, cx);
+        }
         self.rest_hidden_pdfs(window, cx);
         let busy_label = self.busy_label();
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
@@ -4324,11 +4323,7 @@ impl Render for Workspace {
                 this.reopen_closed(window, cx)
             }))
             .on_action(cx.listener(|this, _: &Undo, window, cx| {
-                if this.edit(window, cx, |wb| wb.undo())
-                    && let Some(document) = this.documents.active_mut()
-                {
-                    document.expect_undo();
-                }
+                this.edit(window, cx, |wb| wb.undo());
             }))
             .on_action(cx.listener(|this, _: &Redo, window, cx| {
                 this.edit(window, cx, |wb| wb.redo());

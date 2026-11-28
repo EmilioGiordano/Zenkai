@@ -678,7 +678,9 @@ impl Workspace {
         if self.documents.active_id() != Some(id) {
             return;
         }
-        self.switch_sheet(sheet, window, cx);
+        if !self.show_sheet(sheet, window, cx) {
+            return;
+        }
         self.grid.update(cx, |grid, cx| {
             grid.show_range(target, cx);
         });

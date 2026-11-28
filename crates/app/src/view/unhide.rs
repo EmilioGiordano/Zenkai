@@ -12,8 +12,9 @@ use crate::actions::{
     UnhideExtendUp, UnhideFirstRow, UnhideFocusDown, UnhideFocusUp, UnhideLastRow, UnhideMoveDown,
     UnhideMoveUp, UnhideSelectAll, UnhideToggleRow,
 };
-use crate::focus_ring::inset_focus_ring;
+use crate::focus_ring::{focus_ring, inset_focus_ring};
 use crate::interface_scale::rem_px;
+use crate::scroll_thumb;
 use crate::sheet_tabs;
 use crate::unhide_dialog::{ROW_HEIGHT, Selection, UnhideDialog, rows_shown};
 
@@ -23,6 +24,46 @@ const DIALOG_BOTTOM_MARGIN: f32 = 16.0;
 // Everything in the dialog that is not the list: title, label, footer, hint, padding, gaps.
 const CHROME_HEIGHT: f32 = 230.0;
 const CHECK: &str = "✓";
+
+// A button the dialog focuses itself, so its ring is the shared one and not the widget's own.
+// `focus` is `None` for a disabled button, which then takes no focus.
+fn dialog_button(
+    id: &'static str,
+    label: &'static str,
+    focus: Option<&FocusHandle>,
+    primary: bool,
+    action: Box<dyn Action>,
+    window: &Window,
+    theme: &gpui_kit::component::Theme,
+) -> impl IntoElement {
+    let focused = focus.is_some_and(|handle| handle.is_focused(window));
+    let on_key = action.boxed_clone();
+    let on_click = action;
+    let mut wrapper = div()
+        .id(id)
+        .key_context("UnhideButton")
+        .role(Role::Button)
+        .aria_label(label)
+        .rounded_md()
+        .when(focused, |el| el.shadow(focus_ring(theme)))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if super::activates_button(event) {
+                window.dispatch_action(on_key.boxed_clone(), cx);
+            }
+        });
+    if let Some(handle) = focus {
+        wrapper = wrapper.track_focus(handle);
+    }
+    let mut button = Button::new((id, 1usize))
+        .label(label)
+        .tab_stop(false)
+        .disabled(focus.is_none())
+        .on_click(move |_, window, cx| window.dispatch_action(on_click.boxed_clone(), cx));
+    if primary {
+        button = button.primary();
+    }
+    wrapper.child(button)
+}
 
 impl Workspace {
     pub(super) fn open_unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -36,10 +77,13 @@ impl Workspace {
         }
         let dialog = UnhideDialog {
             generation: document.generation(),
+            sheets_version: document.sheets_version(),
             selection: Selection::new(sheets.len()),
             sheets,
             dialog_focus: cx.focus_handle(),
             list_focus: cx.focus_handle().tab_stop(true),
+            cancel_focus: cx.focus_handle().tab_stop(true),
+            ok_focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
         };
         self.tab_color = None;
@@ -65,10 +109,10 @@ impl Workspace {
         if chosen.is_empty() {
             return;
         }
-        let unchanged = self
-            .documents
-            .active()
-            .is_some_and(|document| document.generation() == dialog.generation);
+        let unchanged = self.documents.active().is_some_and(|document| {
+            document.generation() == dialog.generation
+                && document.sheets_version() == dialog.sheets_version
+        });
         self.close_unhide(window, cx);
         if !unchanged {
             return;
@@ -225,7 +269,16 @@ impl Workspace {
                             .w(rem_px(16.0))
                             .child(if selected { CHECK } else { "" }),
                     )
-                    .child(div().text_sm().child(name))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_sm()
+                            .child(name),
+                    )
             })
             .collect()
     }
@@ -264,7 +317,12 @@ impl Workspace {
             .border_1()
             .border_color(theme.muted_foreground)
             .rounded_md()
-            .children(rows);
+            .children(rows)
+            .child(scroll_thumb::overlay(
+                &dialog.scroll,
+                "unhide-scrollbar",
+                theme.muted_foreground,
+            ));
         let footer = h_flex()
             .items_center()
             .gap_2()
@@ -275,26 +333,24 @@ impl Workspace {
                     .text_color(theme.muted_foreground)
                     .child(count),
             )
-            .child(
-                div().key_context("UnhideButton").child(
-                    Button::new("unhide-cancel")
-                        .label(t!("button.cancel"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(CancelUnhide), cx)
-                        }),
-                ),
-            )
-            .child(
-                div().key_context("UnhideButton").child(
-                    Button::new("unhide-ok")
-                        .primary()
-                        .label(t!("button.ok"))
-                        .disabled(chosen == 0)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ConfirmUnhide), cx)
-                        }),
-                ),
-            );
+            .child(dialog_button(
+                "unhide-cancel",
+                t!("button.cancel"),
+                Some(&dialog.cancel_focus),
+                false,
+                Box::new(CancelUnhide),
+                window,
+                theme,
+            ))
+            .child(dialog_button(
+                "unhide-ok",
+                t!("button.ok"),
+                (chosen > 0).then_some(&dialog.ok_focus),
+                true,
+                Box::new(ConfirmUnhide),
+                window,
+                theme,
+            ));
         let panel = v_flex()
             .id("unhide-dialog")
             .key_context("UnhideDialog")

@@ -14,6 +14,7 @@ use crate::actions::{
 use crate::document::Document;
 use crate::focus_ring::focus_ring;
 use crate::interface_scale::rem_px;
+use crate::scroll_thumb;
 use crate::tab_color_card::{
     Caption, Focus, LABEL_GAP, LABEL_HEIGHT, Move, REGION_PADDING, SECTION_GAP, SWATCH_GAP,
     SWATCH_SIZE, TINT_GAP, TabColorCard, scrolled_to, top_of,
@@ -40,6 +41,7 @@ impl Workspace {
             return;
         };
         let (sheet, generation) = (document.sheet, document.generation());
+        let sheets_version = document.sheets_version();
         let color = document
             .sheets
             .iter()
@@ -49,6 +51,7 @@ impl Workspace {
         let card = TabColorCard::new(
             sheet,
             generation,
+            sheets_version,
             color,
             cx.focus_handle(),
             swatch_focus,
@@ -96,9 +99,11 @@ impl Workspace {
         let Some(card) = &self.tab_color else {
             return;
         };
-        let (sheet, generation) = (card.sheet, card.generation);
+        let (sheet, generation, version) = (card.sheet, card.generation, card.sheets_version);
         let unchanged = self.documents.active().is_some_and(|document: &Document| {
-            document.generation() == generation && document.sheet == sheet
+            document.generation() == generation
+                && document.sheet == sheet
+                && document.sheets_version() == version
         });
         self.close_tab_color(window, cx);
         if unchanged {
@@ -130,6 +135,7 @@ impl Workspace {
         card.focus = focus;
         card.back = back;
         card.moved = true;
+        card.hovered = None;
         let handle = match focus {
             Focus::Swatch(swatch) => card.handle_of(swatch).cloned(),
             Focus::NoColor => Some(card.none_focus.clone()),
@@ -306,6 +312,7 @@ impl Workspace {
             .p(rem_px(REGION_PADDING))
             .child(label(t!("tab_color.theme")))
             .child(spacer(LABEL_GAP));
+        let thumb = cx.theme().muted_foreground;
         for row in 0..THEME_ROWS {
             if row == 1 {
                 region = region.child(spacer(SWATCH_GAP + TINT_GAP));
@@ -316,6 +323,11 @@ impl Workspace {
             region = region.child(self.render_swatch_row(card, cells, window, cx));
         }
         region
+            .child(scroll_thumb::overlay(
+                &card.scroll,
+                "tab-color-scrollbar",
+                thumb,
+            ))
             .child(spacer(SECTION_GAP))
             .child(label(t!("tab_color.standard")))
             .child(spacer(LABEL_GAP))
@@ -401,6 +413,10 @@ impl Workspace {
                 div()
                     .h(rem_px(LABEL_HEIGHT))
                     .flex_none()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_sm()
                     .text_color(theme.muted_foreground)
                     .child(caption),

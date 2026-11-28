@@ -1,4 +1,8 @@
-use zenkai_types::{SheetId, SheetInfo, SheetVisibility};
+use gpui_kit::SharedString;
+use zenkai_i18n::t;
+use zenkai_types::{Rgb, SheetId, SheetInfo, SheetVisibility};
+
+use crate::tab_colors::{self, Swatch};
 
 const MAX_ORIGINS: usize = 32;
 
@@ -46,26 +50,90 @@ pub(crate) fn first_shown(sheets: &[SheetInfo]) -> SheetId {
     shown(sheets).first().copied().unwrap_or(SheetId(0))
 }
 
+// The name of the hidden sheet the strip was showing because nothing was visible, when a
+// change leaves it out of the strip while the sheet itself is still there.
+pub(crate) fn hidden_sheet_left(
+    before: &[StripTab],
+    sheets: &[SheetInfo],
+    after: &[StripTab],
+) -> Option<String> {
+    let tab = before.iter().find(|tab| tab.tooltip.is_some())?;
+    let name: &str = tab.label.as_ref();
+    let still_there = sheets
+        .get(tab.id.0 as usize)
+        .is_some_and(|sheet| sheet.name == name);
+    (still_there && !after.iter().any(|shown| shown.id == tab.id)).then(|| name.to_string())
+}
+
 pub(crate) fn nothing_visible(sheets: &[SheetInfo]) -> bool {
     !sheets
         .iter()
         .any(|sheet| sheet.visibility == SheetVisibility::Visible)
 }
 
-// A sheet in the strip that is not visible, which the strip marks.
-pub(crate) fn is_shown_hidden(sheets: &[SheetInfo], id: SheetId) -> bool {
-    sheets
-        .iter()
-        .any(|sheet| sheet.id == id && sheet.visibility != SheetVisibility::Visible)
-        && shown(sheets).contains(&id)
+// What the strip draws for one sheet, kept ready so a frame builds none of it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StripTab {
+    pub(crate) id: SheetId,
+    pub(crate) label: SharedString,
+    pub(crate) description: SharedString,
+    // Set for a sheet the strip shows while it is not visible: its label is italic and the
+    // tooltip says so.
+    pub(crate) tooltip: Option<SharedString>,
+    pub(crate) color: Option<Rgb>,
 }
 
-pub(crate) fn can_hide(sheets: &[SheetInfo]) -> bool {
+// Sheet ids are positions, so the sheet of an id is at that index.
+pub(crate) fn strip(sheets: &[SheetInfo]) -> Vec<StripTab> {
+    shown(sheets)
+        .into_iter()
+        .filter_map(|id| sheets.get(id.0 as usize))
+        .map(|sheet| {
+            let hidden = sheet.visibility != SheetVisibility::Visible;
+            let name = if hidden {
+                format!("{} {}", sheet.name, t!("sheet.hidden_mark"))
+            } else {
+                sheet.name.clone()
+            };
+            let description = match sheet.color {
+                Some(color) => t!(
+                    "sheet.tab_color_aria",
+                    name = name,
+                    color = Swatch::of(color).map_or_else(|| tab_colors::hex(color), Swatch::name)
+                ),
+                None => name.clone(),
+            };
+            StripTab {
+                id: sheet.id,
+                label: sheet.name.clone().into(),
+                description: description.into(),
+                tooltip: hidden.then(|| name.into()),
+                color: sheet.color,
+            }
+        })
+        .collect()
+}
+
+fn visible_count(sheets: &[SheetInfo]) -> usize {
     sheets
         .iter()
         .filter(|sheet| sheet.visibility == SheetVisibility::Visible)
         .count()
-        > 1
+}
+
+// The sheet is visible and no other one is, so hiding or deleting it would leave none.
+pub(crate) fn only_visible(sheets: &[SheetInfo], id: SheetId) -> bool {
+    visible_count(sheets) == 1
+        && sheets
+            .iter()
+            .any(|sheet| sheet.id == id && sheet.visibility == SheetVisibility::Visible)
+}
+
+pub(crate) fn can_hide(sheets: &[SheetInfo], id: SheetId) -> bool {
+    visible_count(sheets) > 1
+        && sheets
+            .iter()
+            .any(|sheet| sheet.id == id && sheet.visibility == SheetVisibility::Visible)
 }
 
 // Very hidden sheets never count: Excel only lists them through macros.
@@ -160,11 +228,11 @@ pub(crate) fn settled_active(
 
 #[cfg(test)]
 mod tests {
-    use zenkai_types::{SheetId, SheetInfo, SheetVisibility};
+    use zenkai_types::{Rgb, SheetId, SheetInfo, SheetVisibility};
 
     use super::{
-        Cause, UnhideOrigin, can_hide, first_shown, hidden, is_shown_hidden, move_target,
-        neighbour, nothing_visible, remember, settled_active, shown,
+        Cause, UnhideOrigin, can_hide, first_shown, hidden, hidden_sheet_left, move_target,
+        neighbour, nothing_visible, only_visible, remember, settled_active, shown, strip,
     };
 
     const V: SheetVisibility = SheetVisibility::Visible;
@@ -193,7 +261,8 @@ mod tests {
         let sheets = book(&[("A", V), ("B", H), ("C", V), ("D", VH)]);
         assert_eq!(shown(&sheets), ids(&[0, 2]));
         assert_eq!(hidden(&sheets), ids(&[1]));
-        assert!(can_hide(&sheets));
+        assert!(can_hide(&sheets, SheetId(0)));
+        assert!(!can_hide(&sheets, SheetId(1)));
         assert!(!nothing_visible(&sheets));
     }
 
@@ -203,9 +272,15 @@ mod tests {
         assert_eq!(shown(&sheets), ids(&[1]));
         assert_eq!(first_shown(&sheets), SheetId(1));
         assert!(nothing_visible(&sheets));
-        assert!(!can_hide(&sheets));
-        assert!(is_shown_hidden(&sheets, SheetId(1)));
-        assert!(!is_shown_hidden(&sheets, SheetId(2)));
+        assert!(!can_hide(&sheets, SheetId(1)));
+        let tabs = strip(&sheets);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].label.as_ref(), "B");
+        assert_eq!(tabs[0].description.as_ref(), "B (hidden)");
+        assert_eq!(
+            tabs[0].tooltip.as_ref().map(|text| text.as_ref()),
+            Some("B (hidden)")
+        );
         assert_eq!(hidden(&sheets), ids(&[1, 2]));
     }
 
@@ -214,13 +289,60 @@ mod tests {
         let sheets = book(&[("A", VH), ("B", VH)]);
         assert_eq!(shown(&sheets), ids(&[0]));
         assert!(hidden(&sheets).is_empty());
-        assert!(is_shown_hidden(&sheets, SheetId(0)));
+        assert_eq!(
+            strip(&sheets)[0].tooltip.as_ref().map(|text| text.as_ref()),
+            Some("A (hidden)")
+        );
     }
 
     #[test]
     fn one_visible_sheet_cannot_be_hidden() {
-        assert!(!can_hide(&book(&[("A", V), ("B", H)])));
-        assert!(can_hide(&book(&[("A", V), ("B", V)])));
+        assert!(!can_hide(&book(&[("A", V), ("B", H)]), SheetId(0)));
+        assert!(can_hide(&book(&[("A", V), ("B", V)]), SheetId(0)));
+    }
+
+    #[test]
+    fn only_the_one_visible_sheet_is_the_only_visible() {
+        let sheets = book(&[("A", H), ("B", V), ("C", VH)]);
+        assert!(only_visible(&sheets, SheetId(1)));
+        assert!(!only_visible(&sheets, SheetId(0)));
+        assert!(!only_visible(&book(&[("A", V), ("B", V)]), SheetId(0)));
+    }
+
+    #[test]
+    fn the_shown_hidden_sheet_is_named_when_a_visible_sheet_pushes_it_out() {
+        let before = book(&[("Shown", H), ("Other", H)]);
+        let after = book(&[("Shown", H), ("Other", V)]);
+        assert_eq!(
+            hidden_sheet_left(&strip(&before), &after, &strip(&after)),
+            Some("Shown".to_string())
+        );
+        assert_eq!(
+            hidden_sheet_left(&strip(&after), &after, &strip(&after)),
+            None
+        );
+        let deleted = book(&[("Other", V)]);
+        assert_eq!(
+            hidden_sheet_left(&strip(&before), &deleted, &strip(&deleted)),
+            None
+        );
+        assert_eq!(
+            hidden_sheet_left(&strip(&before), &before, &strip(&before)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_colored_tab_is_described_by_its_color_name_or_its_hex() {
+        let mut sheets = book(&[("A", V), ("B", V), ("C", V)]);
+        sheets[0].color = Some(Rgb(0xFFC000));
+        sheets[1].color = Some(Rgb(0x123456));
+        let tabs = strip(&sheets);
+        assert_eq!(tabs[0].description.as_ref(), "A, tab color Gold, Accent 4");
+        assert_eq!(tabs[1].description.as_ref(), "B, tab color #123456");
+        assert_eq!(tabs[2].description.as_ref(), "C");
+        assert_eq!(tabs[0].tooltip, None);
+        assert_eq!(tabs[0].color, Some(Rgb(0xFFC000)));
     }
 
     #[test]

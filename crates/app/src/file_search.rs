@@ -54,10 +54,10 @@ pub fn collect(documents: &Documents, recent: &[PathBuf]) -> Vec<Group> {
     let sheets = documents
         .iter()
         .flat_map(|document| {
-            document.sheets.iter().map(|sheet| Hit {
-                label: sheet.name.clone(),
+            document.strip().iter().map(|tab| Hit {
+                label: tab.label.to_string(),
                 detail: document.name(),
-                target: Target::Sheet(document.id, sheet.id),
+                target: Target::Sheet(document.id, tab.id),
             })
         })
         .collect();
@@ -202,5 +202,17 @@ mod tests {
         let groups = collect(&documents, &[]);
         let sheets = groups.iter().find(|g| g.heading == "Sheets").unwrap();
         assert_eq!(sheets.hits[0].target, Target::Sheet(id, SheetId(0)));
+    }
+
+    #[test]
+    fn a_hidden_sheet_is_not_offered() {
+        use zenkai_engine::Engine;
+        let mut workbook = blank();
+        workbook.add_sheet().unwrap();
+        workbook.add_sheet().unwrap();
+        workbook.hide_sheet(SheetId(1)).unwrap();
+        let documents = Documents::new(workbook);
+        let groups = collect(&documents, &[]);
+        assert_eq!(labels(&groups[1]), ["Sheet1", "Sheet3"]);
     }
 }

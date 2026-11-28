@@ -18,7 +18,7 @@ use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
 use crate::pending_save::{AfterJob, JobEnd, PendingSave};
-use crate::sheet_tabs::{self, Cause, UnhideOrigin};
+use crate::sheet_tabs::{self, Cause, StripTab, UnhideOrigin};
 use crate::spaces::SpaceId;
 use crate::stale_view::{StaleRequest, StaleSlot};
 
@@ -57,8 +57,17 @@ pub struct Document {
     pub sheets: Vec<SheetInfo>,
     // What the last Unhide commands did, so undoing one goes back to the sheet it left.
     unhidden: Vec<UnhideOrigin>,
-    // An undo is queued, so a sheet that goes away with it is told apart from a Hide.
-    undoing: bool,
+    // The workbook's undo count when the sheets were last read, so a sheet that goes away
+    // with an undo is told apart from a Hide.
+    seen_undos: u64,
+    // The tabs the strip draws, rebuilt only when the sheets change.
+    strip: Vec<StripTab>,
+    has_hidden: bool,
+    // The name of the hidden sheet the strip stopped showing when a visible one appeared, for
+    // one notice.
+    left_hidden: Option<String>,
+    // Bumped whenever the sheet list changes, which closes what a dialog chose from the old one.
+    sheets_version: u64,
     // What the document's file holds that this workbook may not, for the open notice and a
     // restored session.
     pub unsupported: Vec<Unsupported>,
@@ -157,6 +166,8 @@ impl Document {
     ) -> Document {
         let sheets = workbook.sheets();
         let sheet = sheet_tabs::first_shown(&sheets);
+        let strip = sheet_tabs::strip(&sheets);
+        let has_hidden = !sheet_tabs::hidden(&sheets).is_empty();
         let csv = path
             .as_deref()
             .filter(|path| files::opens_as_itself(path))
@@ -176,7 +187,11 @@ impl Document {
             sheet,
             sheets,
             unhidden: Vec::new(),
-            undoing: false,
+            seen_undos: 0,
+            strip,
+            has_hidden,
+            left_hidden: None,
+            sheets_version: 0,
             unsupported,
             restored: false,
             read_only: false,
@@ -337,6 +352,7 @@ impl Document {
             return None;
         }
         let shared = self.begin_read()?;
+        self.select_in_engine();
         self.file_job = job;
         if job == FileJob::Autosaving {
             self.autosave_cancel = Arc::new(AtomicBool::new(false));
@@ -545,17 +561,22 @@ impl Document {
 
     // A busy workbook leaves the sheet list as it was and marks it stale for a retry.
     pub fn sync_sheets(&mut self) {
-        let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) else {
+        let Some((sheets, undos)) = self
+            .workbook()
+            .map(|workbook| (workbook.sheets(), workbook.undo_count()))
+        else {
             self.sheets_stale = true;
             return;
         };
         self.sheets_stale = false;
         let last = u32::try_from(sheets.len().saturating_sub(1)).unwrap_or(0);
-        let cause = if std::mem::take(&mut self.undoing) {
-            Cause::Undo
-        } else {
+        let cause = if undos == self.seen_undos {
             Cause::Command
+        } else {
+            Cause::Undo
         };
+        self.seen_undos = undos;
+        let before = self.sheet;
         self.sheet = sheet_tabs::settled_active(
             &self.sheets,
             &sheets,
@@ -563,11 +584,49 @@ impl Document {
             cause,
             &self.unhidden,
         );
-        self.sheets = sheets;
+        let changed = self.sheets != sheets;
+        if changed {
+            let strip = sheet_tabs::strip(&sheets);
+            self.left_hidden = sheet_tabs::hidden_sheet_left(&self.strip, &sheets, &strip);
+            self.strip = strip;
+            self.has_hidden = !sheet_tabs::hidden(&sheets).is_empty();
+            self.sheets = sheets;
+            self.sheets_version += 1;
+        }
+        if changed || self.sheet != before {
+            self.select_in_engine();
+        }
     }
 
-    pub fn expect_undo(&mut self) {
-        self.undoing = true;
+    // What a save writes as the active tab is the sheet the user is on; best effort, as a
+    // busy workbook is written next time.
+    pub fn select_in_engine(&self) {
+        if let Some(mut workbook) = self.workbook_mut() {
+            workbook.select_sheet(self.sheet);
+        }
+    }
+
+    pub fn strip(&self) -> &[StripTab] {
+        &self.strip
+    }
+
+    pub fn take_left_hidden(&mut self) -> Option<String> {
+        self.left_hidden.take()
+    }
+
+    pub fn has_hidden_sheets(&self) -> bool {
+        self.has_hidden
+    }
+
+    pub fn sheets_version(&self) -> u64 {
+        self.sheets_version
+    }
+
+    // Whether the strip lists the sheet, so it can be the active one.
+    pub fn is_shown(&self, sheet: SheetId) -> bool {
+        self.strip
+            .binary_search_by_key(&sheet, |tab| tab.id)
+            .is_ok()
     }
 
     pub fn note_unhide(&mut self, sheets: Vec<SheetId>) {
@@ -580,7 +639,7 @@ impl Document {
 
     // The sheet after an edit that named one: it may be a sheet the strip does not list.
     pub fn keep_sheet_shown(&mut self) {
-        let shown = sheet_tabs::shown(&self.sheets);
+        let shown: Vec<SheetId> = self.strip.iter().map(|tab| tab.id).collect();
         if let Some(nearest) = sheet_tabs::nearest(&shown, self.sheet) {
             self.sheet = nearest;
         }
@@ -1974,7 +2033,6 @@ mod tests {
         document.sheet = SheetId(1);
         hide(&mut document, 1);
         assert_eq!(document.sheet, SheetId(2));
-        document.expect_undo();
         document.workbook_mut().unwrap().undo().unwrap();
         document.sync_sheets();
         assert_eq!(document.sheet, SheetId(1));
@@ -2002,7 +2060,6 @@ mod tests {
             .unwrap();
         document.sync_sheets();
         assert_eq!(document.sheet, SheetId(1));
-        document.expect_undo();
         document.workbook_mut().unwrap().undo().unwrap();
         document.sync_sheets();
         assert_eq!(document.sheet, SheetId(0));
@@ -2015,5 +2072,37 @@ mod tests {
         workbook.hide_sheet(SheetId(0)).unwrap();
         let document = Document::new(WorkbookId(0), SpaceId(0), 1, workbook, None, Vec::new());
         assert_eq!(document.sheet, SheetId(1));
+    }
+
+    #[test]
+    fn the_strip_and_the_version_follow_the_sheet_list_only() {
+        let mut document = three_sheets();
+        assert_eq!(document.strip().len(), 3);
+        assert!(document.is_shown(SheetId(1)));
+        assert!(!document.has_hidden_sheets());
+        let version = document.sheets_version();
+        document.sync_sheets();
+        assert_eq!(document.sheets_version(), version);
+        hide(&mut document, 1);
+        assert_eq!(document.sheets_version(), version + 1);
+        assert!(!document.is_shown(SheetId(1)));
+        assert!(document.is_shown(SheetId(2)));
+        assert!(document.has_hidden_sheets());
+        let tabs: Vec<_> = document.strip().iter().map(|tab| tab.id).collect();
+        assert_eq!(tabs, [SheetId(0), SheetId(2)]);
+    }
+
+    #[test]
+    fn a_color_changes_the_sheet_list_and_so_the_version() {
+        let mut document = three_sheets();
+        let version = document.sheets_version();
+        document
+            .workbook_mut()
+            .unwrap()
+            .set_sheet_color(SheetId(0), Some(zenkai_types::Rgb(0x00B050)))
+            .unwrap();
+        document.sync_sheets();
+        assert_eq!(document.sheets_version(), version + 1);
+        assert_eq!(document.strip()[0].color, Some(zenkai_types::Rgb(0x00B050)));
     }
 }

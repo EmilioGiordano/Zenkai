@@ -137,10 +137,13 @@ pub(crate) fn rows_shown(rows: usize, room: f32) -> usize {
 
 pub(crate) struct UnhideDialog {
     pub(crate) generation: u64,
+    pub(crate) sheets_version: u64,
     pub(crate) sheets: Vec<SheetId>,
     pub(crate) selection: Selection,
     pub(crate) dialog_focus: FocusHandle,
     pub(crate) list_focus: FocusHandle,
+    pub(crate) cancel_focus: FocusHandle,
+    pub(crate) ok_focus: FocusHandle,
     pub(crate) scroll: ScrollHandle,
 }
 

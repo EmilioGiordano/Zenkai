@@ -126,8 +126,8 @@ impl Workspace {
         let Some(target) = target else {
             return;
         };
-        if target.sheet != document.sheet {
-            self.switch_sheet(target.sheet, window, cx);
+        if target.sheet != document.sheet && !self.show_sheet(target.sheet, window, cx) {
+            return;
         }
         self.grid
             .update(cx, |grid, cx| grid.select(target.pos, target.pos, cx));

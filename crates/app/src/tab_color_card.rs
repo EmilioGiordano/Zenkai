@@ -131,6 +131,7 @@ pub(crate) struct TabColorCard {
     // The card acts on the sheet it opened on and the document that held it.
     pub(crate) sheet: SheetId,
     pub(crate) generation: u64,
+    pub(crate) sheets_version: u64,
     // What the file says; a color outside the palette is only named, never marked.
     pub(crate) file_color: Option<Rgb>,
     pub(crate) focus: Focus,
@@ -148,6 +149,7 @@ impl TabColorCard {
     pub(crate) fn new(
         sheet: SheetId,
         generation: u64,
+        sheets_version: u64,
         file_color: Option<Rgb>,
         card_focus: FocusHandle,
         swatch_focus: Vec<FocusHandle>,
@@ -157,6 +159,7 @@ impl TabColorCard {
         TabColorCard {
             sheet,
             generation,
+            sheets_version,
             file_color,
             focus: Focus::Swatch(start),
             back: start,
