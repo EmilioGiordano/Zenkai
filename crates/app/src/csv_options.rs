@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use zenkai_engine::FormatEdits;
 use zenkai_formats::{
     CsvFormat, DateOrder, DecimalMark, Delimiter, Encoding, Guess, LineEnding, ParsedCsv,
+    TextColumns,
 };
 use zenkai_types::LoggedChange;
 
@@ -9,13 +10,17 @@ use crate::edit_log::EditLog;
 
 // How a CSV was read, so that saving it writes it back the same way. The byte order mark is
 // part of the encoding: UTF-8 with BOM and both UTF-16 forms have one, the others do not.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// `text` is the columns read as text, every field as written: a session saved before it
+// existed has none, which is how such a file was read then.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CsvOptions {
     pub delimiter: Delimiter,
     pub encoding: Encoding,
     pub line_ending: LineEnding,
     pub decimal_mark: DecimalMark,
     pub date_order: DateOrder,
+    #[serde(default)]
+    pub text: TextColumns,
 }
 
 impl CsvOptions {
@@ -31,11 +36,12 @@ impl CsvOptions {
             line_ending,
             decimal_mark: DecimalMark::Dot,
             date_order: DateOrder::MonthFirst,
+            text: TextColumns::default(),
         }
     }
 
     // The file's own delimiter, encoding and line ending, with the number and date reading
-    // that was guessed or that the user chose in its place.
+    // that was guessed or that the user chose in its place, and no column read as text.
     pub fn from_read(parsed: &ParsedCsv, reading: &Guess) -> CsvOptions {
         CsvOptions {
             delimiter: parsed.delimiter,
@@ -43,10 +49,11 @@ impl CsvOptions {
             line_ending: parsed.line_ending,
             decimal_mark: reading.decimal_mark,
             date_order: reading.date_order,
+            text: TextColumns::default(),
         }
     }
 
-    pub fn format(self) -> CsvFormat {
+    pub fn format(&self) -> CsvFormat {
         CsvFormat {
             delimiter: self.delimiter,
             encoding: self.encoding,
@@ -210,6 +217,7 @@ mod tests {
                             line_ending,
                             decimal_mark: DecimalMark::Comma,
                             date_order: DateOrder::DayFirst,
+                            text: TextColumns::chosen([0, 2]),
                         }),
                         accepted: Losses {
                             formatting: true,
@@ -259,5 +267,41 @@ mod tests {
         assert_eq!(tsv.encoding, Encoding::Utf8Bom);
         assert_eq!(tsv.line_ending, LineEnding::Crlf);
         assert_eq!(tsv.decimal_mark, DecimalMark::Dot);
+    }
+
+    #[test]
+    fn the_text_choices_survive_the_session_file_each_way() {
+        for text in [
+            TextColumns::default(),
+            TextColumns::chosen([0, 5, 16_383]),
+            TextColumns::Everything,
+        ] {
+            let options = CsvOptions {
+                text,
+                ..CsvOptions::exported_as(Delimiter::Semicolon)
+            };
+            let binding = CsvBinding::new(options.clone());
+            let json = serde_json::to_string(&binding).unwrap();
+            let back: CsvBinding = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, binding);
+            assert_eq!(back.options, Some(options));
+        }
+    }
+
+    #[test]
+    fn a_session_saved_before_the_text_choices_loads_with_none() {
+        let options = CsvOptions::exported_as(Delimiter::Comma);
+        let mut stored = serde_json::to_value(CsvBinding::new(options.clone())).unwrap();
+        let removed = stored["options"]
+            .as_object_mut()
+            .and_then(|fields| fields.remove("text"));
+        assert!(removed.is_some());
+        let loaded: CsvBinding = serde_json::from_value(stored).unwrap();
+        assert_eq!(loaded.options, Some(options));
+        assert!(
+            loaded
+                .options
+                .is_some_and(|options| options.text.is_empty())
+        );
     }
 }

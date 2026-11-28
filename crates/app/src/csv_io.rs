@@ -131,6 +131,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
         other => LoadFailure::Engine(other.into_engine_error(path)),
     })?;
     let hint = stored
+        .as_ref()
         .map(|options| options.delimiter)
         .or_else(|| tsv_delimiter(path));
     let parsed = parse_csv(&bytes, hint)
@@ -144,7 +145,12 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
         None => CsvOptions::from_read(&parsed, &guess(&parsed)),
     };
     let mut rows = parsed.rows;
-    apply(options.decimal_mark, options.date_order, &mut rows);
+    apply(
+        options.decimal_mark,
+        options.date_order,
+        &options.text,
+        &mut rows,
+    );
     let workbook =
         workbook_from_rows(rows).map_err(|e| LoadFailure::Engine(EngineError::Rejected(e)))?;
     let sheet = workbook.sheet_key(SheetId(0));
@@ -629,7 +635,7 @@ mod tests {
             decimal_mark: DecimalMark::Dot,
             ..csv.options
         };
-        let again = load_csv(&path, Some(stored)).unwrap();
+        let again = load_csv(&path, Some(stored.clone())).unwrap();
         assert_eq!(again.csv.unwrap().options, stored);
         assert_eq!(number_at(&again.workbook, 0), None);
     }

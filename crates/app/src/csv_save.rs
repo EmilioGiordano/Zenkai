@@ -218,8 +218,8 @@ pub fn save_csv_file(
     request: &CsvSaveRequest,
     cancel: &AtomicBool,
 ) -> Result<CsvSave, EngineError> {
-    let options = match request.binding.options {
-        Some(options) => options,
+    let options = match &request.binding.options {
+        Some(options) => options.clone(),
         None => csv_io::detect_csv_options(&request.path).map_err(EngineError::Rejected)?,
     };
     let baseline = match csv_io::read_baseline(&request.path, options.delimiter)? {
@@ -377,7 +377,7 @@ pub(crate) mod tests {
     fn request(path: &Path, csv: &CsvLoad, sheets: usize) -> CsvSaveRequest {
         CsvSaveRequest {
             path: path.to_path_buf(),
-            binding: CsvBinding::new(csv.options).with_sheet(csv.sheet),
+            binding: CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet),
             sheets,
             sheet: SheetId(0),
             changed: ChangedFile::Ask,
@@ -920,7 +920,7 @@ pub(crate) mod tests {
                 .delete_rows(SheetId(0), RowIdx::clamped(9), 1)
                 .unwrap();
         }
-        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        let mut binding = CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet);
         binding.note(load.workbook.format_edits(), load.workbook.changes_since(0));
         assert!(binding.log.has_lost());
         let shared = RwLock::new(load.workbook);
@@ -1204,7 +1204,7 @@ pub(crate) mod tests {
         let other = load.workbook.add_sheet().unwrap();
         load.workbook.set_input(other, at(0, 0), "bee").unwrap();
         let shared = RwLock::new(load.workbook);
-        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        let mut binding = CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet);
         binding.accepted.sheets = true;
 
         let mut asked = request(&path, &csv, 2);
@@ -1260,7 +1260,12 @@ pub(crate) mod tests {
         let guessed = zenkai_formats::guess(&read.parsed);
         let options = CsvOptions::from_read(&read.parsed, &guessed);
         let mut rows = read.parsed.rows;
-        zenkai_formats::apply(options.decimal_mark, options.date_order, &mut rows);
+        zenkai_formats::apply(
+            options.decimal_mark,
+            options.date_order,
+            &options.text,
+            &mut rows,
+        );
         let workbook = csv_io::workbook_from_rows(rows).unwrap();
         let mut document = crate::document::Document::new(
             zenkai_types::WorkbookId(0),
@@ -1347,7 +1352,7 @@ pub(crate) mod tests {
         let csv = load.csv.take().unwrap();
         let shared = RwLock::new(load.workbook);
         let cancel = AtomicBool::new(false);
-        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        let mut binding = CsvBinding::new(csv.options.clone()).with_sheet(csv.sheet);
         let batch = |binding: &mut CsvBinding| {
             let workbook = shared.read().unwrap();
             let seen = binding.seen_edits.seq;

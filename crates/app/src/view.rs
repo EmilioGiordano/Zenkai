@@ -1615,6 +1615,7 @@ impl Workspace {
             ..
         } = preview;
         let options = CsvOptions::from_read(&parsed, &guess);
+        let reading = options.clone();
         let mut rows = parsed.rows;
         let origin_path = path.clone();
         cx.spawn_in(window, async move |this, cx| {
@@ -1623,10 +1624,15 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let origin = file_origin(&origin_path);
-                    apply(options.decimal_mark, options.date_order, &mut rows);
+                    apply(
+                        reading.decimal_mark,
+                        reading.date_order,
+                        &reading.text,
+                        &mut rows,
+                    );
                     // On failure, parse again so the preview comes back as it was.
                     let result = csv_io::workbook_from_rows(rows).map_err(|error| {
-                        (error, parse_csv(&task_bytes, Some(options.delimiter)).ok())
+                        (error, parse_csv(&task_bytes, Some(reading.delimiter)).ok())
                     });
                     (result, origin)
                 })

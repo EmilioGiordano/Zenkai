@@ -7,7 +7,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, apply};
+use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, TextColumns, apply};
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
 use crate::entry::FileSeen;
@@ -71,7 +71,12 @@ impl CsvPreview {
             .take(PREVIEW_ROWS)
             .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
             .collect();
-        apply(self.guess.decimal_mark, self.guess.date_order, &mut shown);
+        apply(
+            self.guess.decimal_mark,
+            self.guess.date_order,
+            &TextColumns::default(),
+            &mut shown,
+        );
         self.shown = shown;
     }
 }

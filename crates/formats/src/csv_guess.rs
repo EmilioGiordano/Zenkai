@@ -3,8 +3,11 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::csv_format::{Delimiter, ParsedCsv};
-use crate::dates::{DateOrder, detect_date_order, normalize_day_first};
-use crate::numbers::{detect_decimal_comma, normalize_decimal_comma, number_value};
+use crate::csv_text::TextColumns;
+use crate::dates::{DateOrder, day_first_field, detect_date_order, normalize_day_first};
+use crate::numbers::{
+    decimal_comma_field, detect_decimal_comma, normalize_decimal_comma, number_value,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,12 +26,38 @@ pub struct Guess {
 }
 
 // Dates go first: a day-first date written with dots must not be read as a grouped number.
-pub fn apply(decimal_mark: DecimalMark, date_order: DateOrder, rows: &mut [Vec<String>]) {
-    if date_order == DateOrder::DayFirst {
-        normalize_day_first(rows);
+// The fields of a Text column are left as written.
+pub fn apply(
+    decimal_mark: DecimalMark,
+    date_order: DateOrder,
+    text: &TextColumns,
+    rows: &mut [Vec<String>],
+) {
+    if text.is_empty() {
+        if date_order == DateOrder::DayFirst {
+            normalize_day_first(rows);
+        }
+        if decimal_mark == DecimalMark::Comma {
+            normalize_decimal_comma(rows);
+        }
+        return;
     }
-    if decimal_mark == DecimalMark::Comma {
-        normalize_decimal_comma(rows);
+    for row in rows {
+        for (column, field) in row.iter_mut().enumerate() {
+            if text.holds(column) {
+                continue;
+            }
+            if date_order == DateOrder::DayFirst
+                && let Some(rewritten) = day_first_field(field)
+            {
+                *field = rewritten;
+            }
+            if decimal_mark == DecimalMark::Comma
+                && let Some(rewritten) = decimal_comma_field(field)
+            {
+                *field = rewritten;
+            }
+        }
     }
 }
 
@@ -96,7 +125,12 @@ mod tests {
         assert_eq!(guessed.date_order, DateOrder::DayFirst);
         assert_eq!(guessed.columns, 2);
         let mut rows = parsed.rows;
-        apply(guessed.decimal_mark, guessed.date_order, &mut rows);
+        apply(
+            guessed.decimal_mark,
+            guessed.date_order,
+            &TextColumns::default(),
+            &mut rows,
+        );
         assert_eq!(rows[1], ["2026-10-08", "1.5"]);
     }
 
@@ -169,7 +203,12 @@ mod tests {
             "-".to_string(),
             "+5".to_string(),
         ]];
-        apply(DecimalMark::Comma, DateOrder::DayFirst, &mut rows);
+        apply(
+            DecimalMark::Comma,
+            DateOrder::DayFirst,
+            &TextColumns::default(),
+            &mut rows,
+        );
         let inputs: Vec<String> = rows[0]
             .iter()
             .map(|field| import_input(field).into_owned())
@@ -178,5 +217,44 @@ mod tests {
             inputs,
             ["-3.5", "-1234.5", "-12.5%", "'+34 600", "'-", "+5"]
         );
+    }
+
+    #[test]
+    fn the_fields_of_a_text_column_are_not_rewritten_and_the_others_are() {
+        let original = vec![
+            vec![
+                "1,5".to_string(),
+                "1,5".to_string(),
+                "08/10/2026".to_string(),
+            ],
+            vec![
+                "08/10/2026".to_string(),
+                "2,25".to_string(),
+                "x".to_string(),
+            ],
+        ];
+        let mut rows = original.clone();
+        let text = TextColumns::chosen([0]);
+        apply(DecimalMark::Comma, DateOrder::DayFirst, &text, &mut rows);
+        assert_eq!(rows[0], ["1,5", "1.5", "2026-10-08"]);
+        assert_eq!(rows[1], ["08/10/2026", "2.25", "x"]);
+
+        let mut every = original.clone();
+        apply(
+            DecimalMark::Comma,
+            DateOrder::DayFirst,
+            &TextColumns::Everything,
+            &mut every,
+        );
+        assert_eq!(every, original);
+
+        let mut none = original.clone();
+        apply(
+            DecimalMark::Comma,
+            DateOrder::DayFirst,
+            &TextColumns::default(),
+            &mut none,
+        );
+        assert_eq!(none[0], ["1.5", "1.5", "2026-10-08"]);
     }
 }
