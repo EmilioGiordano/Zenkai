@@ -124,11 +124,11 @@ pub(crate) fn stream_worksheet<R: Read>(
             pool: UnitPool::start(scope, tuning.workers, &env),
         };
         let read = read_units(&mut pump, &mut units, &cut, tuning);
-        let tail = units.settle(read);
+        let end = units.settle(read);
         if let Some(pool) = units.pool.take() {
             pool.close();
         }
-        tail.map(|tail| (tail, units.driver, units.rowtags))
+        end.map(|end| (end, units.driver, units.rowtags))
     })?;
     let tags = [opening.as_slice(), closing.as_slice()];
     Ok(assembled(prefix, qname, tags, rowtags, tail, driver))
@@ -179,9 +179,12 @@ impl Units<'_, '_> {
 
     // The end of the sheet once every unit before it is in, or the first error in
     // document order: a unit's own, or the source's after the units before it.
-    fn settle<T>(&mut self, read: Result<T, Halt>) -> Result<T, ReadError> {
+    fn settle(
+        &mut self,
+        read: Result<(Vec<u8>, Vec<u8>), Halt>,
+    ) -> Result<(Vec<u8>, Vec<u8>), ReadError> {
         match read {
-            Ok(tail) => self.drain().map(|()| tail),
+            Ok(end) => self.drain().map(|()| end),
             Err(Halt::Unit(error)) => Err(error),
             Err(Halt::Source(error)) => match self.drain() {
                 Err(earlier) => Err(earlier),
