@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Spreadsheet
+
+- XLOOKUP with a return range of several columns (or rows) spills the matching row (or
+  column), as Excel does, instead of `#VALUE!` ([#334](https://github.com/EmilioGiordano/Zenkai/issues/334)).
+
 ## [0.1.2]
 
 ### Spreadsheet
