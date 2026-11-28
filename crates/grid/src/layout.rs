@@ -108,6 +108,25 @@ impl Lines {
         shown
     }
 
+    // Maximal runs of lines that take space between `first` and `last`, both included.
+    fn shown_runs(&self, first: u32, last: u32) -> Vec<(u32, u32)> {
+        let mut runs = Vec::new();
+        let mut next = first;
+        while next <= last
+            && let Some(start) = self.next_shown(next)
+            && start <= last
+        {
+            let run_end = self
+                .hidden
+                .range(start..)
+                .next()
+                .map_or(last, |(&hidden_start, _)| (hidden_start - 1).min(last));
+            runs.push((start, run_end));
+            next = run_end + 1;
+        }
+        runs
+    }
+
     fn shown_after(&self, last: u32, count: u32) -> Vec<u32> {
         let mut shown = Vec::new();
         let mut next = last + 1;
@@ -214,6 +233,22 @@ impl Layout {
     pub fn shown_rows(&self, top: RowIdx, height: f32) -> Vec<RowIdx> {
         let shown = self.rows.shown_filling(top.get(), height);
         shown.into_iter().map(row_of).collect()
+    }
+
+    pub fn shown_row_runs(&self, first: RowIdx, last: RowIdx) -> Vec<(RowIdx, RowIdx)> {
+        let runs = self.rows.shown_runs(first.get(), last.get());
+        runs.into_iter()
+            .map(|(start, end)| (row_of(start), row_of(end)))
+            .collect()
+    }
+
+    pub fn shown_col_runs(&self, first: ColIdx, last: ColIdx) -> Vec<(ColIdx, ColIdx)> {
+        let runs = self
+            .columns
+            .shown_runs(u32::from(first.get()), u32::from(last.get()));
+        runs.into_iter()
+            .map(|(start, end)| (col_of(start), col_of(end)))
+            .collect()
     }
 
     pub fn cols_before(&self, col: ColIdx, count: u32, floor: ColIdx) -> Vec<ColIdx> {
@@ -396,6 +431,71 @@ mod tests {
     fn rows_hidden_to_the_end_leave_nothing_to_show() {
         let layout = rows_hidden(5, MAX_ROWS - 1);
         assert!(layout.shown_rows(row_of(5), 800.0).is_empty());
+    }
+
+    fn rows(first: u32, last: u32) -> (RowIdx, RowIdx) {
+        (row_of(first), row_of(last))
+    }
+
+    #[test]
+    fn shown_runs_split_around_hidden_rows() {
+        let mut layout = rows_hidden(2, 4);
+        layout.set_row_height(row_of(7), 0.0);
+        let runs = layout.shown_row_runs(row_of(0), row_of(9));
+        assert_eq!(runs, vec![rows(0, 1), rows(5, 6), rows(8, 9)]);
+    }
+
+    #[test]
+    fn shown_runs_start_and_end_inside_hidden_rows() {
+        let layout = rows_hidden(0, 2);
+        assert_eq!(
+            layout.shown_row_runs(row_of(1), row_of(5)),
+            vec![rows(3, 5)]
+        );
+        let layout = rows_hidden(4, 9);
+        assert_eq!(
+            layout.shown_row_runs(row_of(2), row_of(6)),
+            vec![rows(2, 3)]
+        );
+    }
+
+    #[test]
+    fn shown_runs_are_empty_when_every_row_is_hidden() {
+        let layout = rows_hidden(0, 9);
+        assert!(layout.shown_row_runs(row_of(2), row_of(6)).is_empty());
+    }
+
+    #[test]
+    fn shown_runs_of_visible_rows_are_one_run() {
+        let layout = Layout::default();
+        assert_eq!(
+            layout.shown_row_runs(row_of(3), row_of(8)),
+            vec![rows(3, 8)]
+        );
+    }
+
+    #[test]
+    fn shown_runs_skip_a_huge_hidden_span_in_one_step() {
+        let layout = rows_hidden(2, 1_000_000);
+        assert_eq!(
+            layout.shown_row_runs(RowIdx::default(), RowIdx::LAST),
+            vec![rows(0, 1), rows(1_000_001, MAX_ROWS - 1)]
+        );
+    }
+
+    #[test]
+    fn shown_col_runs_split_around_hidden_columns() {
+        let mut layout = Layout::default();
+        layout.set_col_width(ColIdx::clamped(1), 0.0);
+        layout.set_col_width(ColIdx::clamped(2), 0.0);
+        let runs = layout.shown_col_runs(ColIdx::clamped(0), ColIdx::clamped(4));
+        assert_eq!(
+            runs,
+            vec![
+                (ColIdx::clamped(0), ColIdx::clamped(0)),
+                (ColIdx::clamped(3), ColIdx::clamped(4))
+            ]
+        );
     }
 
     #[test]

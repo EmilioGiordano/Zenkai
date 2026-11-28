@@ -9,6 +9,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Spreadsheet
 
+- XLOOKUP with a return range of several columns (or rows) spills the matching row (or
+  column), as Excel does, instead of `#VALUE!` ([#334](https://github.com/EmilioGiordano/Zenkai/issues/334)).
+- A spilling formula that uses `@`, such as `=B1:B3+@C1:E1`, keeps the `@` when the file is
+  saved instead of reopening without it.
+- Select Visible Cells Only (Alt+;) keeps hidden rows and columns out of the next copy, so
+  copying `A1:A10` with rows 3 to 5 hidden pastes 7 rows
+  ([#339](https://github.com/EmilioGiordano/Zenkai/issues/339)).
 - The CSV preview lets each column be set to Text, and sets by itself the columns with values that start with 0 or have more than 15 digits, such as `00123` and long IDs, so they open and save exactly as written. Keep everything as text opens every column that way
   ([#333](https://github.com/EmilioGiordano/Zenkai/issues/333)).
 

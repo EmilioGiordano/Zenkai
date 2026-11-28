@@ -116,6 +116,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.cycle_reference"), CycleReference),
                 item(t!("palette.insert_line_break"), InsertLineBreak),
                 item(t!("palette.select_region"), SelectCurrentRegion),
+                item(t!("palette.select_visible_cells"), SelectVisibleCells),
                 item(t!("palette.pdf_select_page"), SelectPdfPage),
             ],
         ),

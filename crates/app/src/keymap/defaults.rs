@@ -131,6 +131,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("shift-tab", FocusPreviousControl, Some("CloseDialog")),
         bind("ctrl-`", ToggleFormulas, CONTEXT),
         bind("ctrl-*", SelectCurrentRegion, CONTEXT),
+        bind("alt-;", SelectVisibleCells, CONTEXT),
         bind("ctrl-&", BordersOutside, CONTEXT),
         bind("ctrl-_", BordersNone, CONTEXT),
         bind("ctrl->", GrowFont, CONTEXT),
@@ -518,6 +519,19 @@ mod tests {
         assert_eq!(
             action_in("ctrl-0", "WhatsNew"),
             Some(<ResetDocumentZoom as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn alt_semicolon_selects_the_visible_cells_only() {
+        let binding = defaults()
+            .into_iter()
+            .find(|binding| binding.chord.as_str() == "alt-;")
+            .unwrap();
+        assert_eq!(binding.context, Some("Workspace"));
+        assert_eq!(
+            binding.action.name(),
+            <SelectVisibleCells as Action>::name_for_type()
         );
     }
 
