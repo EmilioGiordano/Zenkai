@@ -711,7 +711,7 @@ fn get_sheet_view(ws: Node) -> SheetView {
     else {
         return SheetView::default();
     };
-    let is_selected = sheet_view.attribute("tabSelected").unwrap_or("0") == "1";
+    let is_selected = get_bool_false(sheet_view, "tabSelected");
     let show_grid_lines = get_bool(sheet_view, "showGridLines");
     let show_row_col_headers = get_bool(sheet_view, "showRowColHeaders");
 
