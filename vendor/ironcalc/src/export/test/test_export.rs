@@ -614,3 +614,36 @@ fn column_ranges_starting_before_the_first_column_are_written_from_column_one() 
         "{written}"
     );
 }
+
+// The `@` is written as `_xlfn.SINGLE` in a dynamic array, whose import adds none: without it
+// the reopened formula adds the whole row XLOOKUP returns instead of its C1.
+#[test]
+fn an_intersection_in_a_dynamic_array_survives_save_and_load() {
+    let mut model = new_empty_model();
+    for (index, key) in ["a", "b", "c"].iter().enumerate() {
+        let row = index as i32 + 1;
+        model.set_user_input(0, row, 1, key.to_string()).unwrap();
+        for column in 2..=4 {
+            let value = row * 10 + column - 2;
+            model
+                .set_user_input(0, row, column, value.to_string())
+                .unwrap();
+        }
+    }
+    let formula = "=B1:B3+@XLOOKUP(\"a\",A1:A3,B1:D3)";
+    model.set_user_input(0, 5, 3, formula.to_string()).unwrap();
+    model.evaluate();
+    let temp_file_name = "temp_file_test_intersection_in_dynamic_array.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let mut model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    fs::remove_file(temp_file_name).unwrap();
+    model.evaluate();
+    assert_eq!(
+        model.get_cell_formula(0, 5, 3).unwrap(),
+        Some(formula.to_string())
+    );
+    for (row, value) in [(5, "21"), (6, "31"), (7, "41")] {
+        assert_eq!(model.get_formatted_cell_value(0, row, 3).unwrap(), value);
+    }
+    assert_eq!(model.get_formatted_cell_value(0, 5, 4).unwrap(), "");
+}
