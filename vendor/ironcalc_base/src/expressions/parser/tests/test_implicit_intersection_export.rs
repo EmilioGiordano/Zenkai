@@ -156,6 +156,45 @@ fn nested_redundant_intersections_are_fully_removed() {
     assert_eq!(excel_formula, "A1:A10");
 }
 
+// A plain XLOOKUP cell keeps its text through an import and an export, nested or not. One
+// that can return several cells gets the `@` legacy Excel reads it with, as INDEX does, and
+// an `@` the import would add again is dropped, as for a range.
+#[test]
+fn xlookup_in_a_plain_cell_keeps_its_text() {
+    check(&[
+        (
+            "_xlfn.XLOOKUP(E1,A1:A3,B1:B3)",
+            "XLOOKUP(E1,A1:A3,B1:B3)",
+            "_xlfn.XLOOKUP(E1,A1:A3,B1:B3)",
+        ),
+        (
+            "_xlfn.XLOOKUP(E1,A1:A3,B1:D3)",
+            "@XLOOKUP(E1,A1:A3,B1:D3)",
+            "_xlfn.XLOOKUP(E1,A1:A3,B1:D3)",
+        ),
+        (
+            "SUM(IFERROR(_xlfn.XLOOKUP(E1,A1:A3,B1:D3),0))",
+            "SUM(IFERROR(@XLOOKUP(E1,A1:A3,B1:D3),0))",
+            "SUM(IFERROR(_xlfn.XLOOKUP(E1,A1:A3,B1:D3),0))",
+        ),
+        (
+            "SUM(_xlfn.SINGLE(_xlfn.XLOOKUP(E1,A1:A3,B1:D3)))",
+            "SUM(@XLOOKUP(E1,A1:A3,B1:D3))",
+            "SUM(_xlfn.SINGLE(_xlfn.XLOOKUP(E1,A1:A3,B1:D3)))",
+        ),
+        (
+            "_xlfn.SINGLE(_xlfn.XLOOKUP(E1,A1:A3,B1:B3))",
+            "@XLOOKUP(E1,A1:A3,B1:B3)",
+            "_xlfn.SINGLE(_xlfn.XLOOKUP(E1,A1:A3,B1:B3))",
+        ),
+        (
+            "_xlfn.SINGLE(_xlfn.XLOOKUP(E1,A1:A3,B1:D3))",
+            "@XLOOKUP(E1,A1:A3,B1:D3)",
+            "_xlfn.XLOOKUP(E1,A1:A3,B1:D3)",
+        ),
+    ]);
+}
+
 // The import adds no `@` to an array formula, so its export keeps every one.
 #[test]
 fn array_formulas_keep_every_intersection() {
