@@ -25,6 +25,62 @@ pub fn row_header_width(last_visible_row: RowIdx) -> f32 {
     let digits = (last_visible_row.get() + 1).to_string().len() as f32;
     MIN_ROW_HEADER_WIDTH.max(digits * 8.0 + 14.0)
 }
+
+// What the sheet's View settings hide; the default hides nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hidden {
+    pub gridlines: bool,
+    pub headings: bool,
+}
+
+// The room the column letters and row numbers take; hidden headings give all of it back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Headers {
+    height: f32,
+    width: f32,
+}
+
+impl Headers {
+    fn of(hidden: Hidden, last_visible_row: RowIdx) -> Headers {
+        if hidden.headings {
+            Headers {
+                height: 0.0,
+                width: 0.0,
+            }
+        } else {
+            Headers {
+                height: HEADER_HEIGHT,
+                width: row_header_width(last_visible_row),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Region {
+    Corner,
+    RowHeader,
+    ColHeader,
+    Body,
+}
+
+fn region_at(x: f32, y: f32, headers: Headers) -> Region {
+    match (x < headers.width, y < headers.height) {
+        (true, true) => Region::Corner,
+        (true, false) => Region::RowHeader,
+        (false, true) => Region::ColHeader,
+        (false, false) => Region::Body,
+    }
+}
+
+// The size of the scrolling pane in unzoomed units, inside the frozen panes and the bars.
+fn pane_extent(bounds: (f32, f32), zoom: f32, headers: Headers, frozen: (f32, f32)) -> (f32, f32) {
+    let bar = THICKNESS / zoom;
+    let width = (bounds.0 / zoom - headers.width - frozen.0 - bar).max(0.0);
+    let height = (bounds.1 / zoom - headers.height - frozen.1 - bar).max(0.0);
+    (width, height)
+}
+
 const MIN_ZOOM: f32 = 0.5;
 const MAX_ZOOM: f32 = 3.0;
 
@@ -182,6 +238,7 @@ pub struct Grid {
     tab_start: Option<ColIdx>,
     frozen_rows: u32,
     frozen_cols: u16,
+    hidden: Hidden,
     merges: Rc<Vec<Range>>,
     last_paint: Rc<Cell<Duration>>,
     active_formula: SharedString,
@@ -206,6 +263,7 @@ pub struct SheetView {
     pub layout: Layout,
     pub frozen_rows: u32,
     pub frozen_cols: u16,
+    pub hidden: Hidden,
     pub merges: Vec<Range>,
 }
 
@@ -242,6 +300,7 @@ impl Grid {
             tab_start: None,
             frozen_rows: 0,
             frozen_cols: 0,
+            hidden: Hidden::default(),
             merges: Rc::new(Vec::new()),
             last_paint: Rc::new(Cell::new(Duration::ZERO)),
             active_formula: SharedString::default(),
@@ -275,10 +334,22 @@ impl Grid {
         self.zoom
     }
 
-    fn row_header(&self) -> f32 {
+    pub fn hidden(&self) -> Hidden {
+        self.hidden
+    }
+
+    fn headers(&self) -> Headers {
         let origin = self.scroll_origin();
         let last = self.shown_rows.last().copied().unwrap_or(origin.row);
-        row_header_width(last.offset(1))
+        Headers::of(self.hidden, last.offset(1))
+    }
+
+    fn row_header(&self) -> f32 {
+        self.headers().width
+    }
+
+    fn header_height(&self) -> f32 {
+        self.headers().height
     }
 
     fn visible_rows(&self) -> u32 {
@@ -326,6 +397,7 @@ impl Grid {
     fn apply_view(&mut self, view: SheetView) {
         self.layout = Rc::new(view.layout);
         (self.frozen_rows, self.frozen_cols) = capped_frozen(view.frozen_rows, view.frozen_cols);
+        self.hidden = view.hidden;
         self.merges = Rc::new(view.merges);
         self.used_end = view.used_end;
     }
@@ -459,7 +531,7 @@ impl Grid {
                     .sum::<f32>()
         };
         let left = (self.row_header() + x) * self.zoom;
-        let top = (HEADER_HEIGHT + y) * self.zoom;
+        let top = (self.header_height() + y) * self.zoom;
         let inside =
             left <= f32::from(self.bounds.size.width) && top <= f32::from(self.bounds.size.height);
         inside.then(|| point(px(left), px(top)))
@@ -713,15 +785,15 @@ impl Grid {
     }
 
     fn viewport_extent(&self) -> (f32, f32) {
-        let (frozen_w, frozen_h) = self.frozen_size();
-        let bar = THICKNESS / self.zoom;
-        let width =
-            (f32::from(self.bounds.size.width) / self.zoom - self.row_header() - frozen_w - bar)
-                .max(0.0);
-        let height =
-            (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT - frozen_h - bar)
-                .max(0.0);
-        (width, height)
+        pane_extent(
+            (
+                f32::from(self.bounds.size.width),
+                f32::from(self.bounds.size.height),
+            ),
+            self.zoom,
+            self.headers(),
+            self.frozen_size(),
+        )
     }
 
     fn recompute_viewport(&mut self, _cx: &mut Context<Self>) {
@@ -752,7 +824,7 @@ impl Grid {
         match axis {
             Axis::Vertical => Track::along(
                 f32::from(self.bounds.size.height),
-                HEADER_HEIGHT * self.zoom,
+                self.header_height() * self.zoom,
             ),
             Axis::Horizontal => Track::along(
                 f32::from(self.bounds.size.width),
@@ -853,9 +925,10 @@ impl Grid {
     fn edge_at(&self, position: Point<Pixels>) -> Option<(Edge, f32)> {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
-        if (0.0..HEADER_HEIGHT).contains(&y) {
+        let headers = self.headers();
+        if (0.0..headers.height).contains(&y) {
             let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
-            let mut edge = self.row_header();
+            let mut edge = headers.width;
             for col in frozen.chain(self.shown_cols.iter().copied()) {
                 edge += self.layout.col_width(col);
                 if (x - edge).abs() <= RESIZE_GRIP {
@@ -865,9 +938,9 @@ impl Grid {
                     return None;
                 }
             }
-        } else if (0.0..self.row_header()).contains(&x) {
+        } else if (0.0..headers.width).contains(&x) {
             let frozen = (0..self.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
-            let mut edge = HEADER_HEIGHT;
+            let mut edge = headers.height;
             for row in frozen.chain(self.shown_rows.iter().copied()) {
                 edge += self.layout.row_height(row);
                 if (y - edge).abs() <= RESIZE_GRIP {
@@ -897,7 +970,7 @@ impl Grid {
 
     fn row_bottom(&self, target: RowIdx) -> Option<f32> {
         let frozen = (0..self.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
-        let mut edge = HEADER_HEIGHT;
+        let mut edge = self.header_height();
         for row in frozen.chain(self.shown_rows.iter().copied()) {
             edge += self.layout.row_height(row);
             if row == target {
@@ -979,8 +1052,9 @@ impl Grid {
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
         let (frozen_w, frozen_h) = self.frozen_size();
         let origin = self.scroll_origin();
-        let body_y = y - HEADER_HEIGHT;
-        let body_x = x - self.row_header();
+        let headers = self.headers();
+        let body_y = y - headers.height;
+        let body_x = x - headers.width;
         let row = if body_y < frozen_h {
             self.layout.row_at(RowIdx::default(), body_y)
         } else {
@@ -991,11 +1065,11 @@ impl Grid {
         } else {
             self.layout.col_at(origin.col, body_x - frozen_w)
         };
-        match (x < self.row_header(), y < HEADER_HEIGHT) {
-            (true, true) => Hit::Corner,
-            (true, false) => Hit::RowHeader(row),
-            (false, true) => Hit::ColHeader(col),
-            (false, false) => Hit::Cell(CellPos::new(row, col)),
+        match region_at(x, y, headers) {
+            Region::Corner => Hit::Corner,
+            Region::RowHeader => Hit::RowHeader(row),
+            Region::ColHeader => Hit::ColHeader(col),
+            Region::Body => Hit::Cell(CellPos::new(row, col)),
         }
     }
 
@@ -1426,6 +1500,9 @@ impl Render for Grid {
             focused: self.focus.is_focused(window),
             colors: paint::Colors::from_theme(cx),
             row_header: self.row_header(),
+            header_height: self.header_height(),
+            gridlines: !self.hidden.gridlines,
+            headings: !self.hidden.headings,
             frozen_rows: self.frozen_rows,
             frozen_cols: self.frozen_cols,
             merges: self.merges.clone(),
@@ -1873,14 +1950,76 @@ fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColI
 #[cfg(test)]
 mod tests {
     use super::{
-        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, Selection, cached_ranges,
-        capped_frozen, cycle_within, moved_selection, next_boundary, prev_boundary, reveal_axes,
+        Direction, GridCell, HEADER_HEIGHT, Headers, Hidden, MAX_FROZEN_COLS, MAX_FROZEN_ROWS,
+        Region, Selection, cached_ranges, capped_frozen, cycle_within, moved_selection,
+        next_boundary, pane_extent, prev_boundary, region_at, reveal_axes, row_header_width,
         shown_contains, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
     fn pos(text: &str) -> CellPos {
         CellPos::parse_a1(text).unwrap()
+    }
+
+    const HEADINGS_HIDDEN: Hidden = Hidden {
+        gridlines: false,
+        headings: true,
+    };
+
+    #[test]
+    fn shown_headings_take_their_room() {
+        let last = RowIdx::clamped(999);
+        let headers = Headers::of(Hidden::default(), last);
+        assert_eq!(headers.height, HEADER_HEIGHT);
+        assert_eq!(headers.width, row_header_width(last));
+    }
+
+    #[test]
+    fn hidden_headings_give_back_whatever_room_they_had() {
+        for last in [RowIdx::clamped(9), RowIdx::clamped(999_999)] {
+            let headers = Headers::of(HEADINGS_HIDDEN, last);
+            assert_eq!((headers.height, headers.width), (0.0, 0.0));
+        }
+        let wide = Headers::of(Hidden::default(), RowIdx::clamped(999_999));
+        assert!(wide.width > 48.0);
+    }
+
+    #[test]
+    fn hidden_gridlines_keep_the_headings() {
+        let hidden = Hidden {
+            gridlines: true,
+            headings: false,
+        };
+        let headers = Headers::of(hidden, RowIdx::clamped(9));
+        assert_eq!(headers.height, HEADER_HEIGHT);
+    }
+
+    #[test]
+    fn a_press_in_the_top_left_corner_hits_a_cell_when_headings_are_hidden() {
+        let shown = Headers::of(Hidden::default(), RowIdx::clamped(9));
+        let hidden = Headers::of(HEADINGS_HIDDEN, RowIdx::clamped(9));
+        assert_eq!(region_at(1.0, 1.0, shown), Region::Corner);
+        assert_eq!(region_at(1.0, 30.0, shown), Region::RowHeader);
+        assert_eq!(region_at(60.0, 1.0, shown), Region::ColHeader);
+        assert_eq!(region_at(60.0, 30.0, shown), Region::Body);
+        for (x, y) in [(0.0, 0.0), (1.0, 1.0), (1.0, 30.0), (60.0, 1.0)] {
+            assert_eq!(region_at(x, y, hidden), Region::Body, "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn the_scrolling_pane_grows_by_the_room_the_headings_gave_back() {
+        let bounds = (800.0, 600.0);
+        let shown = Headers::of(Hidden::default(), RowIdx::clamped(9));
+        let hidden = Headers::of(HEADINGS_HIDDEN, RowIdx::clamped(9));
+        let (shown_w, shown_h) = pane_extent(bounds, 1.0, shown, (0.0, 0.0));
+        let (hidden_w, hidden_h) = pane_extent(bounds, 1.0, hidden, (0.0, 0.0));
+        assert!((hidden_w - shown_w - shown.width).abs() < 1e-3);
+        assert!((hidden_h - shown_h - shown.height).abs() < 1e-3);
+        let (frozen_w, frozen_h) = pane_extent(bounds, 2.0, hidden, (100.0, 40.0));
+        let (plain_w, plain_h) = pane_extent(bounds, 2.0, hidden, (0.0, 0.0));
+        assert!((plain_w - frozen_w - 100.0).abs() < 1e-3);
+        assert!((plain_h - frozen_h - 40.0).abs() < 1e-3);
     }
 
     #[test]
