@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use zenkai_formats::{AtRisk, DateOrder, DecimalMark, number_value, read_field};
+use zenkai_formats::{AtRisk, DateOrder, DecimalMark, TextColumns, number_value, read_field};
 use zenkai_types::ColIdx;
 
 pub const SAMPLE_ROWS: usize = 12;
@@ -102,6 +102,22 @@ pub fn detected_formats(columns: &[Column]) -> Vec<Format> {
             }
         })
         .collect()
+}
+
+// The columns the import reads as text: all of them with Keep everything as text, else those
+// the user left as Text.
+pub fn text_columns(formats: &[Format], keep_all: bool) -> TextColumns {
+    if keep_all {
+        TextColumns::Everything
+    } else {
+        TextColumns::chosen(
+            formats
+                .iter()
+                .enumerate()
+                .filter(|(_, format)| **format == Format::Text)
+                .map(|(index, _)| index),
+        )
+    }
 }
 
 // "00123" read as a number is 123, which is what a General column shows of it.
@@ -222,6 +238,17 @@ mod tests {
             general_text("1,50", DecimalMark::Comma, month, false),
             "1.50"
         );
+    }
+
+    #[test]
+    fn the_import_reads_as_text_the_flagged_columns_the_user_kept_or_every_column() {
+        let columns = built(&[&["id", "n", "code"], &["007", "5", "0099"]]);
+        let mut formats = detected_formats(&columns);
+        assert_eq!(text_columns(&formats, false), TextColumns::chosen([0, 2]));
+        formats[0] = Format::General;
+        formats[1] = Format::Text;
+        assert_eq!(text_columns(&formats, false), TextColumns::chosen([1, 2]));
+        assert_eq!(text_columns(&formats, true), TextColumns::Everything);
     }
 
     #[test]

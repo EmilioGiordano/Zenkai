@@ -12,15 +12,14 @@ use std::sync::Arc;
 use gpui_kit::component::VirtualListScrollHandle;
 use gpui_kit::*;
 use zenkai_formats::{
-    AtRisk, DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, TextColumns, find_at_risk, guess,
-    parse_csv,
+    AtRisk, DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, find_at_risk, guess, parse_csv,
 };
 use zenkai_i18n::t;
 
 use crate::csv_options::CsvOptions;
 use crate::entry::FileSeen;
 pub use columns::Format;
-use columns::{Column, columns_of, detected_formats, first_selected};
+use columns::{Column, columns_of, detected_formats, first_selected, text_columns};
 
 pub fn delimiter_label(delimiter: Delimiter) -> &'static str {
     match delimiter {
@@ -119,7 +118,7 @@ impl CsvPreview {
         let formats = detected_formats(&columns);
         let selected = first_selected(&columns);
         let columns_scroll = VirtualListScrollHandle::new();
-        columns_scroll.scroll_to_item(selected, ScrollStrategy::Top);
+        columns_scroll.scroll_to_item(selected, ScrollStrategy::Nearest);
         CsvPreview {
             path,
             bytes,
@@ -157,7 +156,7 @@ impl CsvPreview {
         self.formats = detected_formats(&self.columns);
         self.selected = first_selected(&self.columns);
         self.columns_scroll
-            .scroll_to_item(self.selected, ScrollStrategy::Top);
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
         self.sizes = None;
         self.parsed = parsed;
         self.guess = guess;
@@ -175,7 +174,7 @@ impl CsvPreview {
             ..self.parsed.clone()
         };
         let options = CsvOptions {
-            text: self.text_columns(),
+            text: text_columns(&self.formats, self.keep_all),
             ..CsvOptions::from_read(&parsed, &self.guess)
         };
         Import {
@@ -184,20 +183,6 @@ impl CsvPreview {
             parsed,
             options,
             seen: self.seen,
-        }
-    }
-
-    fn text_columns(&self) -> TextColumns {
-        if self.keep_all {
-            TextColumns::Everything
-        } else {
-            TextColumns::chosen(
-                self.formats
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, format)| **format == Format::Text)
-                    .map(|(index, _)| index),
-            )
         }
     }
 
@@ -263,7 +248,7 @@ impl CsvPreview {
         };
         self.selected = index.min(last);
         self.columns_scroll
-            .scroll_to_item(self.selected, ScrollStrategy::Top);
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
         cx.notify();
     }
 
