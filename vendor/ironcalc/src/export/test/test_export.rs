@@ -129,6 +129,76 @@ fn hidden_grid_lines_and_headers_round_trip() {
 }
 
 #[test]
+fn an_auto_filter_round_trips_with_the_rows_it_hides() {
+    use ironcalc_base::types::{
+        AutoFilter, FilterColumn, FilterCriteria, SortCondition, SortState,
+    };
+    let mut model = new_empty_model();
+    for row in 1..=5 {
+        model
+            .set_user_input(0, row, 1, format!("v<{row}>"))
+            .unwrap();
+    }
+    model.workbook.worksheets[0]
+        .set_row_hidden(3, true)
+        .unwrap();
+    model.workbook.worksheets[0]
+        .set_row_hidden(4, true)
+        .unwrap();
+    let filter = AutoFilter {
+        first_row: 1,
+        first_column: 1,
+        last_row: 5,
+        last_column: 3,
+        columns: vec![
+            FilterColumn {
+                column: 0,
+                criteria: FilterCriteria::Values {
+                    values: vec!["v<2>".to_string(), "v<5>".to_string(), "a\"b".to_string()],
+                    blank: true,
+                },
+                hidden_button: false,
+                show_button: true,
+            },
+            FilterColumn {
+                column: 2,
+                criteria: FilterCriteria::Kept(
+                    r#"<top10 top="0" val="2" filterVal="1"/>"#.to_string(),
+                ),
+                hidden_button: true,
+                show_button: false,
+            },
+        ],
+        filtered_rows: vec![3, 4],
+        sort_state: Some(SortState {
+            first_row: 2,
+            first_column: 1,
+            last_row: 5,
+            last_column: 3,
+            conditions: vec![SortCondition {
+                first_row: 2,
+                first_column: 1,
+                last_row: 5,
+                last_column: 1,
+                descending: true,
+                attributes: r#" sortBy="value""#.to_string(),
+            }],
+            attributes: r#" caseSensitive="1""#.to_string(),
+        }),
+    };
+    model.set_auto_filter(0, Some(filter.clone())).unwrap();
+    model.evaluate();
+    let temp_file_name = "temp_file_test_auto_filter.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    let sheet = model.workbook.worksheet(0).unwrap();
+    assert_eq!(sheet.auto_filter.as_ref(), Some(&filter));
+    assert!(sheet.is_row_hidden(3).unwrap());
+    assert!(!sheet.is_row_hidden(2).unwrap());
+    fs::remove_file(temp_file_name).unwrap();
+}
+
+#[test]
 fn shown_grid_lines_and_headers_write_no_attribute() {
     let model = new_empty_model();
     let temp_file_name = "temp_file_test_shown_grid_lines_and_headers.xlsx";

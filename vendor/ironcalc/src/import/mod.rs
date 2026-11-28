@@ -1,3 +1,4 @@
+mod auto_filter;
 mod conditional_formatting;
 mod metadata;
 pub(crate) mod shared_strings;

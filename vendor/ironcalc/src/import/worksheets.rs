@@ -25,6 +25,7 @@ use thiserror::Error;
 use crate::error::XlsxError;
 
 use super::{
+    auto_filter::load_auto_filter,
     conditional_formatting::load_conditional_formatting,
     shared_strings::{decode_xlsx_escapes, is_phonetic_run_text},
     tables::load_table,
@@ -1219,29 +1220,28 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
         },
     );
 
-    Ok((
-        Worksheet {
-            dimension,
-            cols,
-            rows,
-            shared_formulas,
-            sheet_data,
-            name: sheet_name.to_string(),
-            sheet_id,
-            state: state.to_owned(),
-            color,
-            merge_cells,
-            comments: settings.comments,
-            frozen_rows: sheet_view.frozen_rows,
-            frozen_columns: sheet_view.frozen_columns,
-            show_grid_lines: sheet_view.show_grid_lines,
-            show_row_col_headers: sheet_view.show_row_col_headers,
-            views,
-            conditional_formatting,
-            auto_filter: None,
-        },
-        sheet_view.is_selected,
-    ))
+    let mut worksheet = Worksheet {
+        dimension,
+        cols,
+        rows,
+        shared_formulas,
+        sheet_data,
+        name: sheet_name.to_string(),
+        sheet_id,
+        state: state.to_owned(),
+        color,
+        merge_cells,
+        comments: settings.comments,
+        frozen_rows: sheet_view.frozen_rows,
+        frozen_columns: sheet_view.frozen_columns,
+        show_grid_lines: sheet_view.show_grid_lines,
+        show_row_col_headers: sheet_view.show_row_col_headers,
+        views,
+        conditional_formatting,
+        auto_filter: load_auto_filter(ws),
+    };
+    worksheet.mark_filtered_rows();
+    Ok((worksheet, sheet_view.is_selected))
 }
 
 pub(super) fn load_sheets<R: Read + std::io::Seek>(
