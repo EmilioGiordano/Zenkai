@@ -19,8 +19,8 @@ use zenkai_grid::{
 };
 use zenkai_i18n::t;
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, NumberFormat, Range, Rgb, SheetId,
-    StyleChange, WorkbookId,
+    BorderPreset, CellPos, CellStyle, ColIdx, Contents, FilterView, HAlign, NumberFormat, Range,
+    Rgb, SheetId, StyleChange, WorkbookId,
 };
 
 mod agent_access;
@@ -33,6 +33,7 @@ mod close_dialog;
 mod closing;
 mod csv_files;
 mod display;
+mod filters;
 mod messages;
 mod notice_card;
 mod notices;
@@ -72,6 +73,8 @@ use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
 use crate::failure::{Failure, offer_another_location, save_failure};
 use crate::files;
+use crate::filter::texts::records_found;
+use crate::filter::visible::{PasteRoute, filtered_out, paste_route};
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::go_to::{self, GoToError};
@@ -207,6 +210,10 @@ pub struct Workspace {
     clipboard_source: Option<Arc<InternalClip>>,
     visible_mark: VisibleMark,
     copy_request: u64,
+    // The AutoFilter of the sheet on screen, as the grid last drew it.
+    filter_view: Option<FilterView>,
+    filter_list: Option<filters::FilterSession>,
+    filter_job: Option<filters::FilterJob>,
     chart: Option<ChartPanel>,
     palette: Option<Entity<CommandState>>,
     search: Option<SearchOverlay>,
@@ -439,6 +446,9 @@ impl Workspace {
             clipboard_source: None,
             visible_mark: VisibleMark::default(),
             copy_request: 0,
+            filter_view: None,
+            filter_list: None,
+            filter_job: None,
             chart: None,
             palette: None,
             search: None,
@@ -545,11 +555,20 @@ impl Workspace {
 
     fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
         self.forget_find_results();
-        let view = self.sheet_view();
+        self.filter_list = None;
+        let view = self.shown_sheet_view();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
         self.sync_pending_highlight(cx);
         self.sync_review_marks(cx);
         self.refresh_cells(cx);
+    }
+
+    // The view the grid is about to show; the filter in it is what the workspace answers
+    // copies, totals and pastes from until the next one.
+    fn shown_sheet_view(&mut self) -> SheetView {
+        let view = self.sheet_view();
+        self.filter_view = view.filter.as_ref().map(|bar| bar.view.clone());
+        view
     }
 
     fn sheet_view(&self) -> SheetView {
@@ -571,6 +590,7 @@ impl Workspace {
                         headings: !wb.headings_shown(sheet),
                     },
                     merges: wb.merged(sheet),
+                    filter: filters::filter_bar(&wb, sheet),
                 }
             })
             .unwrap_or_default()
@@ -1080,7 +1100,12 @@ impl Workspace {
         if let Some(wb) = document.workbook() {
             self.missed.stats_done(generation);
             if inline {
-                self.stats = stats::compute(&wb, sheet, range);
+                self.stats = stats::compute(
+                    &wb,
+                    sheet,
+                    range,
+                    crate::filter::visible::filtered_out(self.filter_view.as_ref()),
+                );
             }
             self.active_input = wb.input(sheet, selection.active).into();
             self.active_style = wb.cell(sheet, selection.active).style;
@@ -1117,10 +1142,13 @@ impl Workspace {
             return;
         };
         let (request, generation) = (self.stats_request, document.generation());
+        let skipped = crate::filter::visible::filtered_out(self.filter_view.as_ref()).to_vec();
         cx.spawn(async move |this, cx| {
             let stats = cx
                 .background_executor()
-                .spawn(async move { stats::compute(&document::read_shared(&shared), sheet, range) })
+                .spawn(async move {
+                    stats::compute(&document::read_shared(&shared), sheet, range, &skipped)
+                })
                 .await;
             let update = this.update(cx, |this, cx| {
                 let current = this
@@ -1274,6 +1302,7 @@ impl Workspace {
                 self.edit(window, cx, move |wb| wb.extend(sheet, source, target));
             }
             GridEvent::AutoFitRequested(col) => self.auto_fit(*col, window, cx),
+            GridEvent::FilterButton(col) => self.open_filter_list(*col, window, cx),
             GridEvent::EndRequested { extend } => {
                 let Some(end) = self
                     .documents
@@ -1326,6 +1355,7 @@ impl Workspace {
         if self.prompts.blocks_input() {
             return false;
         }
+        self.cancel_filter_for_edit(cx);
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
         if self.clipboard_source.take().is_some() {
@@ -1400,6 +1430,7 @@ impl Workspace {
             let update = this.update(cx, |this, cx| {
                 this.previews.batch_finished(generation);
                 let shown = this.documents.active_id() == Some(id);
+                this.finish_filter_job(id, cx);
                 let Some(document) = this.documents.get_mut(id) else {
                     this.clear_calculating(cx);
                     return;
@@ -1431,8 +1462,12 @@ impl Workspace {
                     this.wait_for_workbook(id, cx);
                 }
                 this.last_recalc = Some(started.elapsed());
-                if let Some(error) = errors.first() {
-                    this.notify(Severity::Error, error.to_string(), cx);
+                match errors.first() {
+                    Some(EngineError::FilteredPaste) => {
+                        this.notify(Severity::Warning, t!("filter.paste_refused"), cx)
+                    }
+                    Some(error) => this.notify(Severity::Error, error.to_string(), cx),
+                    None => {}
                 }
                 if shown {
                     if sheet_changed {
@@ -1440,7 +1475,7 @@ impl Workspace {
                     } else {
                         // Edits can insert rows, resize, merge or freeze; refresh the
                         // layout without moving the selection.
-                        let view = this.sheet_view();
+                        let view = this.shown_sheet_view();
                         this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
                     }
                     this.sync_review_marks(cx);
@@ -2650,7 +2685,8 @@ impl Workspace {
         self.copy_request += 1;
         let range = self.selection(cx);
         let scope = self.visible_mark.copy_scope();
-        let shape = CopyShape::of(range, scope, self.grid.read(cx).layout());
+        let shape = CopyShape::of(range, scope, self.grid.read(cx).layout())
+            .leaving_out_rows(filtered_out(self.filter_view.as_ref()));
         let Some(document) = self.documents.active() else {
             return;
         };
@@ -2780,17 +2816,45 @@ impl Workspace {
             self.notify(Severity::Warning, t!("notice.paste_past_sheet_edge"), cx);
             return;
         }
-        let (height, width) = match &internal {
-            Some(clip) => (clip.shape.row_count(), clip.shape.col_count()),
-            None => {
-                let rows = clipboard::parse_tsv(&text);
+        let external = internal.is_none().then(|| clipboard::parse_tsv(&text));
+        let (height, width) = match (&internal, &external) {
+            (Some(clip), _) => (clip.shape.row_count(), clip.shape.col_count()),
+            (None, rows) => {
+                let rows = rows.as_deref().unwrap_or_default();
                 let height = u32::try_from(rows.len()).unwrap_or(u32::MAX);
                 let width =
                     u16::try_from(rows.iter().map(Vec::len).max().unwrap_or(0)).unwrap_or(u16::MAX);
-                self.edit(window, cx, move |wb| wb.set_inputs(sheet, origin, &rows));
                 (height, width)
             }
         };
+        let end = CellPos::new(
+            origin.row.offset(i64::from(height.saturating_sub(1))),
+            origin.col.offset(i64::from(width.saturating_sub(1))),
+        );
+        let selection = self.selection(cx);
+        let route = paste_route(
+            self.filter_view.as_ref(),
+            self.grid.read(cx).layout(),
+            selection,
+            (height, width),
+            Range::new(origin, end),
+        );
+        let cut = internal.as_ref().is_some_and(|clip| clip.cut);
+        match route {
+            PasteRoute::Refuse => {
+                self.clipboard_source = internal;
+                self.notify(Severity::Warning, t!("filter.paste_refused"), cx);
+                return;
+            }
+            PasteRoute::FillSelection if !cut => {
+                self.fill_filtered_selection(internal, external, selection, window, cx);
+                return;
+            }
+            PasteRoute::FillSelection | PasteRoute::Plain => {}
+        }
+        if let Some(rows) = external {
+            self.edit(window, cx, move |wb| wb.set_inputs(sheet, origin, &rows));
+        }
         let cut_source = internal
             .as_ref()
             .filter(|clip| clip.cut)
@@ -2801,10 +2865,6 @@ impl Workspace {
             // Pasting a copy keeps copy mode, so the same cells can be pasted again.
             self.clipboard_source = keep;
         }
-        let end = CellPos::new(
-            origin.row.offset(i64::from(height.saturating_sub(1))),
-            origin.col.offset(i64::from(width.saturating_sub(1))),
-        );
         self.forget_review_range(sheet, Range::new(origin, end), cx);
         if let Some(source) = cut_source {
             self.forget_review_range(sheet, source, cx);
@@ -2813,6 +2873,42 @@ impl Workspace {
             grid.set_marquee(None, cx);
             grid.select(origin, end, cx);
         });
+    }
+
+    // One value pasted over a selection that holds rows a filter hides fills the visible
+    // rows only, as Excel does.
+    fn fill_filtered_selection(
+        &mut self,
+        internal: Option<Arc<InternalClip>>,
+        external: Option<Vec<Vec<String>>>,
+        selection: Range,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sheet) = self.active_sheet() else {
+            return;
+        };
+        let origin = self.grid.read(cx).selection().active;
+        self.forget_review_range(sheet, selection, cx);
+        let keep = internal.clone();
+        self.edit(window, cx, move |wb| match (internal, external) {
+            (Some(clip), _) => {
+                let at = clip.range.start;
+                let input = wb.input(clip.sheet, at);
+                wb.fill_with(sheet, at, &input, selection)
+            }
+            (None, Some(rows)) => {
+                let value = rows
+                    .into_iter()
+                    .next()
+                    .and_then(|row| row.into_iter().next())
+                    .unwrap_or_default();
+                wb.fill_with(sheet, origin, &value, selection)
+            }
+            (None, None) => Ok(()),
+        });
+        self.clipboard_source = keep;
+        self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
     }
 
     // Excel's Paste Values: the values shown in the copied cells, without formulas or
@@ -3844,11 +3940,14 @@ impl Workspace {
         busy_label: Option<SharedString>,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
-        let long_job = self.job_pill.shown(Instant::now()).map(|job| match job {
+        let shown_job = self.job_pill.shown(Instant::now());
+        let long_job = shown_job.map(|job| match job {
             LongJob::Saving => t!("busy.saving"),
             LongJob::Calculating => t!("busy.calculating"),
+            LongJob::Filtering => t!("busy.filtering"),
             LongJob::Autosaving => t!("busy.autosaving"),
         });
+        let filtering = shown_job == Some(LongJob::Filtering) && self.filter_job.is_some();
         let busy = busy_label
             .filter(|busy| ![t!("busy.calculating"), t!("busy.saving")].contains(&busy.as_ref()))
             .or_else(|| long_job.map(SharedString::from))?;
@@ -3896,6 +3995,19 @@ impl Workspace {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.cancel_open(window, cx);
                                     })),
+                            )
+                        })
+                        .when(filtering, |pill| {
+                            pill.child(
+                                Button::new("cancel-filter")
+                                    .small()
+                                    .label(t!("button.cancel"))
+                                    .tooltip(keymap::labeled(
+                                        cx,
+                                        t!("palette.cancel_filter"),
+                                        &CancelFilter,
+                                    ))
+                                    .on_click(cx.listener(|this, _, _, cx| this.cancel_filter(cx))),
                             )
                         }),
                 ),
@@ -3949,6 +4061,8 @@ impl Workspace {
                     .child(Icon::new(icon).size_3().flex_none())
                     .child(div().min_w_0().truncate().child(summary)),
             );
+        } else if let Some(found) = self.filter_view.as_ref().and_then(records_found) {
+            left = left.child(div().text_color(theme.foreground).child(found));
         } else {
             left = left.child(
                 div()
@@ -4161,7 +4275,12 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .h_full()
-            .child(toolbar::render(&self.active_style, &self.colors, cx))
+            .child(toolbar::render(
+                &self.active_style,
+                &self.colors,
+                self.filter_view.is_some(),
+                cx,
+            ))
             .children(
                 (display::formula_bar_shown(cx) || self.go_to.is_some())
                     .then(|| self.render_formula_bar(cx)),
@@ -4233,6 +4352,9 @@ impl Render for Workspace {
                 }
                 if self.open_loads.newest_cancellable() {
                     context.add("Opening");
+                }
+                if self.filter_job.is_some() {
+                    context.add("Filtering");
                 }
                 context
             })
@@ -4341,6 +4463,16 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SelectVisibleCells, _, cx| {
                 this.select_visible_cells(cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleAutoFilter, window, cx| {
+                this.toggle_auto_filter(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ClearAllFilters, window, cx| {
+                this.clear_all_filters(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenFilterList, window, cx| {
+                this.open_filter_list_at_active(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelFilter, _, cx| this.cancel_filter(cx)))
             .on_action(
                 cx.listener(|this, _: &FreezeTopRow, window, cx| this.freeze(1, 0, window, cx)),
             )
@@ -4877,6 +5009,7 @@ impl Render for Workspace {
             .children(self.render_palette(cx))
             .children(self.render_theme_picker(cx))
             .children(self.render_search(cx))
+            .children(self.filter_list.as_ref().map(|open| open.list().clone()))
             .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
             .children(self.render_notice_card(window, cx))

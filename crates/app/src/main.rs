@@ -29,6 +29,7 @@ mod entry;
 mod failure;
 mod file_search;
 mod files;
+mod filter;
 mod find;
 mod focus_ring;
 mod format_category;

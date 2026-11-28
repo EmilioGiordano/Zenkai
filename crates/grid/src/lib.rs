@@ -14,10 +14,10 @@ mod paint_failure;
 mod scrollbar;
 
 pub use actions::*;
+pub use filter_button::FilterBar;
 pub use grid::{
     Direction, EditMode, Editor, Grid, GridCell, GridEvent, Hidden, MAX_TYPED_PREVIEW_CELLS,
     Selection, SheetView, ViewState, step, typed_preview,
 };
-pub use filter_button::FilterBar;
 pub use layout::Layout;
 pub use paint::{HighContrast, PENDING_COLOR, filter_blue, frozen_divider, selection_accent};

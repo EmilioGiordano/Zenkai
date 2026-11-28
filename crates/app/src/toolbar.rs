@@ -150,7 +150,12 @@ pub struct ColorPickers {
     pub fill: Entity<ColorPickerState>,
 }
 
-pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoElement {
+pub fn render(
+    style: &CellStyle,
+    colors: &ColorPickers,
+    filtered: bool,
+    cx: &App,
+) -> impl IntoElement {
     let theme = cx.theme();
     h_flex()
         .h(rem_px(36.0))
@@ -321,6 +326,16 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
             FormatDate,
         ))
         .child(separator(cx))
+        .child(
+            tool(
+                cx,
+                "filter",
+                IconName::Funnel,
+                t!("toolbar.filter"),
+                ToggleAutoFilter,
+            )
+            .selected(filtered),
+        )
         .child(tool(
             cx,
             "chart",

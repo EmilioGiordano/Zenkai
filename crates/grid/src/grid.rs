@@ -426,6 +426,7 @@ impl Grid {
 
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
         self.apply_view(view);
+        self.filter_open = None;
         self.cells = Rc::new(HashMap::new());
         self.top = self.layout.row_from(RowIdx::default());
         self.left = self.layout.col_from(ColIdx::default());
