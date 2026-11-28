@@ -343,6 +343,9 @@ pub fn save_csv_file(
 }
 
 #[cfg(test)]
+mod text_columns_tests;
+
+#[cfg(test)]
 pub(crate) mod tests {
     use std::path::Path;
 
