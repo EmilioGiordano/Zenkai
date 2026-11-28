@@ -116,12 +116,52 @@ fn linear_search(
 }
 
 impl<'a> Model<'a> {
+    // XLOOKUP returns a reference, as INDEX does: the row (or column) of return_array at the
+    // match, which spills when it holds more than one cell.
+    fn xlookup_result(
+        &mut self,
+        result_left: CellReferenceIndex,
+        result_right: CellReferenceIndex,
+        is_row_vector: bool,
+        offset: i32,
+    ) -> CalcResult {
+        let (left, right) = if is_row_vector {
+            let row = result_left.row + offset;
+            (
+                CellReferenceIndex { row, ..result_left },
+                CellReferenceIndex {
+                    row,
+                    ..result_right
+                },
+            )
+        } else {
+            let column = result_left.column + offset;
+            (
+                CellReferenceIndex {
+                    column,
+                    ..result_left
+                },
+                CellReferenceIndex {
+                    column,
+                    ..result_right
+                },
+            )
+        };
+        if left == right {
+            self.evaluate_cell(left)
+        } else {
+            CalcResult::Range { left, right }
+        }
+    }
+
     /// The XLOOKUP function searches a range or an array, and then returns the item corresponding
     /// to the first match it finds. If no match exists, then XLOOKUP can return the closest (approximate) match.
     /// =XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])
     ///
-    /// lookup_array and return_array must be column or row arrays and of the same dimension.
-    /// Otherwise #VALUE! is returned
+    /// lookup_array must be a column or a row. return_array must have as many rows as a column
+    /// lookup_array (as many columns as a row lookup_array), otherwise #VALUE! is returned.
+    /// The row (or column) of return_array at the match is returned, and spills when it holds
+    /// more than one cell.
     /// [if_not_found]
     /// Where a valid match is not found, return the [if_not_found] text you supply.
     /// If a valid match is not found, and [if_not_found] is missing, #N/A is returned.
@@ -213,12 +253,7 @@ impl<'a> Model<'a> {
         // lookup_array
         match self.evaluate_node_in_context(&args[1], cell) {
             CalcResult::Range { left, right } => {
-                let is_row_vector;
-                if left.row == right.row {
-                    is_row_vector = false;
-                } else if left.column == right.column {
-                    is_row_vector = true;
-                } else {
+                if left.row != right.row && left.column != right.column {
                     // second argument must be a vector
                     return CalcResult::Error {
                         error: Error::ERROR,
@@ -232,10 +267,20 @@ impl<'a> Model<'a> {
                         left: result_left,
                         right: result_right,
                     } => {
-                        if result_right.row - result_left.row != right.row - left.row
-                            || result_right.column - result_left.column
-                                != right.column - left.column
+                        // A one-cell lookup_array is read down when return_array is one row
+                        // tall, so a table with one row gives that row.
+                        let is_row_vector = if left.row == right.row && left.column == right.column
                         {
+                            result_left.row == result_right.row
+                        } else {
+                            left.row != right.row
+                        };
+                        let same_length = if is_row_vector {
+                            result_right.row - result_left.row == right.row - left.row
+                        } else {
+                            result_right.column - result_left.column == right.column - left.column
+                        };
+                        if !same_length {
                             return CalcResult::Error {
                                 error: Error::VALUE,
                                 origin: cell,
@@ -312,17 +357,12 @@ impl<'a> Model<'a> {
                                     }
                                 };
                                 match found {
-                                    Some(index) => {
-                                        let row_index =
-                                            if is_row_vector { index as i32 } else { 0 };
-                                        let column_index =
-                                            if is_row_vector { 0 } else { index as i32 };
-                                        self.evaluate_cell(CellReferenceIndex {
-                                            sheet: result_left.sheet,
-                                            row: result_left.row + row_index,
-                                            column: result_left.column + column_index,
-                                        })
-                                    }
+                                    Some(index) => self.xlookup_result(
+                                        result_left,
+                                        result_right,
+                                        is_row_vector,
+                                        index as i32,
+                                    ),
                                     None => if_not_found,
                                 }
                             }
@@ -354,10 +394,6 @@ impl<'a> Model<'a> {
                                 match index {
                                     None => if_not_found,
                                     Some(l) => {
-                                        let row =
-                                            result_left.row + if is_row_vector { l } else { 0 };
-                                        let column =
-                                            result_left.column + if is_row_vector { 0 } else { l };
                                         if match_mode == MatchMode::ExactMatch {
                                             let value = self.evaluate_cell(CellReferenceIndex {
                                                 sheet: left.sheet,
@@ -366,22 +402,24 @@ impl<'a> Model<'a> {
                                                     + if is_row_vector { 0 } else { l },
                                             });
                                             if compare_values(&value, &lookup_value) == 0 {
-                                                self.evaluate_cell(CellReferenceIndex {
-                                                    sheet: result_left.sheet,
-                                                    row,
-                                                    column,
-                                                })
+                                                self.xlookup_result(
+                                                    result_left,
+                                                    result_right,
+                                                    is_row_vector,
+                                                    l,
+                                                )
                                             } else {
                                                 if_not_found
                                             }
                                         } else if match_mode == MatchMode::ExactMatchSmaller
                                             || match_mode == MatchMode::ExactMatchLarger
                                         {
-                                            self.evaluate_cell(CellReferenceIndex {
-                                                sheet: result_left.sheet,
-                                                row,
-                                                column,
-                                            })
+                                            self.xlookup_result(
+                                                result_left,
+                                                result_right,
+                                                is_row_vector,
+                                                l,
+                                            )
                                         } else {
                                             CalcResult::Error {
                                                 error: Error::VALUE,
