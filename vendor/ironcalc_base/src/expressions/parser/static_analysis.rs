@@ -486,6 +486,67 @@ fn static_analysis_index(_args: &[Node]) -> StaticResult {
     StaticResult::Unknown
 }
 
+#[derive(PartialEq)]
+enum Span {
+    One,
+    Many,
+    // One end is absolute and the other relative, so it depends on the cell.
+    Varies,
+}
+
+fn span(start: i32, absolute_start: bool, end: i32, absolute_end: bool) -> Span {
+    if absolute_start != absolute_end {
+        Span::Varies
+    } else if start == end {
+        Span::One
+    } else {
+        Span::Many
+    }
+}
+
+fn range_spans(node: &Node) -> Option<(Span, Span)> {
+    match node {
+        Node::RangeKind {
+            row1,
+            column1,
+            row2,
+            column2,
+            absolute_row1,
+            absolute_column1,
+            absolute_row2,
+            absolute_column2,
+            ..
+        } => Some((
+            span(*row1, *absolute_row1, *row2, *absolute_row2),
+            span(*column1, *absolute_column1, *column2, *absolute_column2),
+        )),
+        _ => None,
+    }
+}
+
+/// XLOOKUP returns the row of return_array at the match for a lookup_array that is a column,
+/// and the column for one that is a row, so it is a scalar when that row or column is one cell.
+/// A lookup_array whose shape is unknown here (a name, a table, a function) is taken to run
+/// along a return_array that is one column or one row. A return_array whose shape is unknown
+/// is taken as a scalar, as before XLOOKUP could spill: Excel writes a single-value XLOOKUP as
+/// a plain formula, and a dynamic one would be written as an array formula.
+fn static_analysis_xlookup(args: &[Node]) -> StaticResult {
+    let Some((return_rows, return_columns)) = args.get(2).and_then(range_spans) else {
+        return StaticResult::Scalar;
+    };
+    let is_scalar = match args.get(1).and_then(range_spans) {
+        Some((Span::Many, Span::One)) => return_columns == Span::One,
+        Some((Span::One, Span::Many)) => return_rows == Span::One,
+        Some((Span::One, Span::One)) => return_rows == Span::One && return_columns == Span::One,
+        _ => return_rows == Span::One || return_columns == Span::One,
+    };
+    if is_scalar {
+        StaticResult::Scalar
+    } else {
+        StaticResult::Unknown
+    }
+}
+
 #[derive(Clone)]
 enum Signature {
     Scalar,
@@ -1713,7 +1774,7 @@ fn static_analysis_on_function(kind: &Function, args: &[Node]) -> StaticResult {
         Function::Vstack => StaticResult::Unknown,
         Function::Wrapcols => StaticResult::Unknown,
         Function::Wraprows => StaticResult::Unknown,
-        Function::Xlookup => not_implemented(args),
+        Function::Xlookup => static_analysis_xlookup(args),
         Function::Xmatch => not_implemented(args),
         Function::Trimrange => StaticResult::Unknown,
         Function::Sort => StaticResult::Unknown,
