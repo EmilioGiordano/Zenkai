@@ -1,6 +1,6 @@
-use gpui_kit::base::{Selectable, h_flex, v_flex};
+use gpui_kit::base::{Disableable, Selectable, h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName};
+use gpui_kit::component::{ActiveTheme, Icon, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_formats::{DateOrder, DecimalMark, Delimiter};
