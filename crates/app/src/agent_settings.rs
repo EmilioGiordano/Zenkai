@@ -199,12 +199,24 @@ fn secret_states(names: &[SecretName]) -> BTreeMap<SecretName, SecretState> {
 // gives agents more power is approved here and never held like a file edit.
 // Without a settings folder nothing is written and the failure is recorded.
 pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
+    change_then(cx, edit, |_, _| {});
+}
+
+// `done` gets the outcome once the file is written, and the failure text kept in
+// `AgentConfig::failure` when it is not. It never runs inside the caller's own update.
+pub fn change_then(
+    cx: &mut App,
+    edit: impl Fn(&mut Settings) + Send + 'static,
+    done: impl FnOnce(Result<(), String>, &mut App) + 'static,
+) {
     let config = cx.global::<AgentConfig>();
     let Some(paths) = config.paths.clone() else {
         let error = SettingsFileError::NoFolder;
+        let failure = t!("settings.not_changed", error = error);
         cx.update_global::<AgentConfig, _>(|config, _| {
-            config.failure = Some(t!("settings.not_changed", error = error));
+            config.failure = Some(failure.clone());
         });
+        cx.defer(move |cx| done(Err(failure), cx));
         return;
     };
     let current = config.state.current.clone();
@@ -218,6 +230,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
             .spawn(async move { settings_file::update(&paths, edit) })
             .await;
         let written_failed = written.is_err();
+        let mut outcome = Ok(());
         cx.update_global::<AgentConfig, _>(|config, _| match written {
             Ok(settings) => {
                 config.state.apply_from_page(settings, &approved);
@@ -226,8 +239,13 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
                 }
                 config.failure = None;
             }
-            Err(error) => config.failure = Some(t!("settings.not_changed", error = error)),
+            Err(error) => {
+                let failure = t!("settings.not_changed", error = error);
+                config.failure = Some(failure.clone());
+                outcome = Err(failure);
+            }
         });
+        cx.update(move |cx| done(outcome, cx));
         if written_failed {
             cx.update(crate::theme::revert_to_settings);
             cx.update(crate::interface_scale::revert_to_settings);

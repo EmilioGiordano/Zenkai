@@ -55,6 +55,11 @@ pub struct GeneralSettings {
     pub check_for_updates: bool,
     #[serde(default)]
     pub status_summary: StatusSummary,
+    #[serde(default = "on_by_default")]
+    #[schemars(
+        description = "Show the formula bar (name box and formula) above the grid. The View command Formula Bar turns it on or off. It applies to every window and workbook and is never saved in a workbook file."
+    )]
+    pub formula_bar: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -150,6 +155,7 @@ impl Default for GeneralSettings {
             markdown_opens_in: MarkdownOpensIn::default(),
             check_for_updates: on_by_default(),
             status_summary: StatusSummary::default(),
+            formula_bar: on_by_default(),
         }
     }
 }
@@ -596,6 +602,34 @@ mod tests {
         let text = serde_json::to_string(&appearance).unwrap();
         let back: AppearanceSettings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.interface_scale.percent(), 150);
+    }
+
+    #[test]
+    fn the_formula_bar_is_shown_unless_the_file_says_otherwise() {
+        assert!(GeneralSettings::default().formula_bar);
+        let older: GeneralSettings = serde_json::from_str("{}").unwrap();
+        assert!(older.formula_bar);
+        let hidden: GeneralSettings = serde_json::from_str(r#"{ "formula_bar": false }"#).unwrap();
+        assert!(!hidden.formula_bar);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_the_formula_bar_flag_still_loads() {
+        let mut file: serde_json::Value =
+            serde_json::from_str(&crate::settings::Settings::default().to_json().unwrap()).unwrap();
+        let general = file["general"].as_object_mut().unwrap();
+        assert!(general.remove("formula_bar").is_some());
+        let loaded = crate::settings::Settings::parse(&file.to_string()).unwrap();
+        assert!(loaded.general.formula_bar);
+    }
+
+    #[test]
+    fn the_formula_bar_flag_survives_a_round_trip() {
+        let mut settings = crate::settings::Settings::default();
+        settings.general.formula_bar = false;
+        let back = crate::settings::Settings::parse(&settings.to_json().unwrap()).unwrap();
+        assert!(!back.general.formula_bar);
+        assert_eq!(back, settings);
     }
 
     #[test]

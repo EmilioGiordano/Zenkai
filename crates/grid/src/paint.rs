@@ -5,7 +5,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 use zenkai_types::{CellPos, ColIdx, HAlign, Range, Rgb, RowIdx, VAlign, ValueKind};
 
-use crate::grid::{EditMode, Editor, GridCell, HEADER_HEIGHT};
+use crate::grid::{EditMode, Editor, GridCell};
 use crate::layout::Layout;
 use crate::paint_failure::PaintFailure;
 
@@ -24,6 +24,7 @@ pub struct Colors {
     foreground: Hsla,
     gridline: Hsla,
     header: Hsla,
+    header_line: Hsla,
     header_text: Hsla,
     header_active: Hsla,
     header_active_text: Hsla,
@@ -31,32 +32,49 @@ pub struct Colors {
     selection: Hsla,
     error: Hsla,
     frozen: Hsla,
+    frozen_alone: Hsla,
+}
+
+// Excel's selection green; a lighter tone keeps contrast on dark backgrounds.
+pub fn selection_accent(is_dark: bool, high_contrast: bool) -> Hsla {
+    if high_contrast {
+        rgb(0xFF_FF_00).into()
+    } else if is_dark {
+        rgb(0x4C_AF_7A).into()
+    } else {
+        rgb(0x21_73_46).into()
+    }
+}
+
+// With the gridlines hidden the divider is the only line that marks the frozen panes, so
+// it is drawn at full strength to stay at least 3:1 against the background.
+pub fn frozen_divider(muted_foreground: Hsla, gridlines_shown: bool) -> Hsla {
+    if gridlines_shown {
+        muted_foreground.opacity(0.6)
+    } else {
+        muted_foreground
+    }
 }
 
 impl Colors {
     pub fn from_theme(cx: &App) -> Colors {
         let theme = cx.theme();
-        // Excel's selection green; a lighter tone keeps contrast on dark backgrounds.
         let high_contrast = cx.try_global::<HighContrast>().is_some_and(|h| h.0);
-        let accent: Hsla = if high_contrast {
-            rgb(0xFF_FF_00).into()
-        } else if theme.mode.is_dark() {
-            rgb(0x4C_AF_7A).into()
-        } else {
-            rgb(0x21_73_46).into()
-        };
+        let accent = selection_accent(theme.mode.is_dark(), high_contrast);
         Colors {
             background: theme.background,
             foreground: theme.foreground,
             gridline: theme.border.opacity(0.6),
             header: theme.table_head,
+            header_line: theme.border.opacity(0.6),
             header_text: theme.muted_foreground,
             header_active: theme.border,
             header_active_text: accent,
             accent,
             selection: accent.opacity(if high_contrast { 0.3 } else { 0.14 }),
             error: theme.danger,
-            frozen: theme.muted_foreground.opacity(0.6),
+            frozen: frozen_divider(theme.muted_foreground, true),
+            frozen_alone: frozen_divider(theme.muted_foreground, false),
         }
     }
 }
@@ -82,6 +100,9 @@ pub struct Frame {
     pub merges: Rc<Vec<Range>>,
     pub formula_refs: Vec<Range>,
     pub row_header: f32,
+    pub header_height: f32,
+    pub gridlines: bool,
+    pub headings: bool,
 }
 
 const FILL_HANDLE: f32 = 7.0;
@@ -179,7 +200,7 @@ fn columns(frame: &Frame, width: f32) -> Columns {
 
 fn rows(frame: &Frame, height: f32) -> Rows {
     let z = frame.zoom;
-    let mut y = HEADER_HEIGHT * z;
+    let mut y = frame.header_height * z;
     let mut ys = Vec::with_capacity(frame.frozen_rows as usize + frame.shown_rows.len());
     let frozen = (0..frame.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
     for row in frozen.chain(frame.shown_rows.iter().copied()) {
@@ -242,21 +263,23 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
             }
         }
 
-        for (_, x, w) in &columns.xs {
-            window.paint_quad(fill(
-                rect(origin, x + w - 1.0, HEADER_HEIGHT * z, 1.0, bottom),
-                c.gridline,
-            ));
-        }
-        for (_, y, h) in &rows.ys {
-            window.paint_quad(fill(
-                rect(origin, frame.row_header * z, y + h - 1.0, right, 1.0),
-                c.gridline,
-            ));
+        if frame.gridlines {
+            for (_, x, w) in &columns.xs {
+                window.paint_quad(fill(
+                    rect(origin, x + w - 1.0, frame.header_height * z, 1.0, bottom),
+                    c.gridline,
+                ));
+            }
+            for (_, y, h) in &rows.ys {
+                window.paint_quad(fill(
+                    rect(origin, frame.row_header * z, y + h - 1.0, right, 1.0),
+                    c.gridline,
+                ));
+            }
         }
 
         for merge in &merges {
-            let Some(area) = range_rect(*merge, &columns, &rows, origin, z) else {
+            let Some(area) = range_rect(*merge, &columns, &rows, origin) else {
                 continue;
             };
             let cell = frame.cells.get(&merge.start);
@@ -288,7 +311,11 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
                 // Top and left lines sit on the neighbour's bottom and right pixel, so a
                 // border two adjacent cells share stays one pixel thin.
                 // The first row and column have no neighbour pixel: that one is the header's.
-                let top = if *y > HEADER_HEIGHT { y - 1.0 } else { *y };
+                let top = if *y > frame.header_height {
+                    y - 1.0
+                } else {
+                    *y
+                };
                 let left = if *x > frame.row_header { x - 1.0 } else { *x };
                 if cell.style.border_top {
                     window.paint_quad(fill(
@@ -330,28 +357,35 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
             }
         }
 
+        let divider = if frame.gridlines {
+            c.frozen
+        } else {
+            c.frozen_alone
+        };
         if frame.frozen_rows > 0
             && let Some((_, y, h)) = rows.ys.get(frame.frozen_rows as usize - 1)
         {
-            window.paint_quad(fill(rect(origin, 0.0, y + h - 1.0, right, 1.0), c.frozen));
+            window.paint_quad(fill(rect(origin, 0.0, y + h - 1.0, right, 1.0), divider));
         }
         if frame.frozen_cols > 0
             && let Some((_, x, w)) = columns.xs.get(usize::from(frame.frozen_cols) - 1)
         {
-            window.paint_quad(fill(rect(origin, x + w - 1.0, 0.0, 1.0, bottom), c.frozen));
+            window.paint_quad(fill(rect(origin, x + w - 1.0, 0.0, 1.0, bottom), divider));
         }
 
         paint_selection(frame, &columns, &rows, origin, bounds, window);
-        paint_headers(
-            frame,
-            &columns,
-            &rows,
-            origin,
-            bounds,
-            line_height,
-            window,
-            cx,
-        );
+        if frame.headings {
+            paint_headers(
+                frame,
+                &columns,
+                &rows,
+                origin,
+                bounds,
+                line_height,
+                window,
+                cx,
+            );
+        }
         if let Some(editor) = &frame.editor {
             paint_editor(frame, editor, &columns, &rows, origin, window, cx);
         }
@@ -588,7 +622,6 @@ fn range_rect(
     columns: &Columns,
     rows: &Rows,
     origin: Point<Pixels>,
-    z: f32,
 ) -> Option<Bounds<Pixels>> {
     let first_col = columns.xs.first()?;
     let last_col = columns.xs.last()?;
@@ -608,7 +641,7 @@ fn range_rect(
         .map_or(last_col.1 + last_col.2 + 2.0, |(x, w)| x + w);
     let y0 = rows
         .starting_at(range.start.row)
-        .map_or(HEADER_HEIGHT * z - 2.0, |(y, _)| y);
+        .map_or(first_row.1 - 2.0, |(y, _)| y);
     let y1 = rows
         .ending_at(range.end.row)
         .map_or(last_row.1 + last_row.2 + 2.0, |(y, h)| y + h);
@@ -628,15 +661,15 @@ fn paint_selection(
     let body = Bounds::new(
         point(
             origin.x + px(frame.row_header * z),
-            origin.y + px(HEADER_HEIGHT * z),
+            origin.y + px(frame.header_height * z),
         ),
         size(
             bounds.size.width - px(frame.row_header * z),
-            bounds.size.height - px(HEADER_HEIGHT * z),
+            bounds.size.height - px(frame.header_height * z),
         ),
     );
     window.with_content_mask(Some(ContentMask { bounds: body }), |window| {
-        if let Some(area) = range_rect(frame.selection, columns, rows, origin, z) {
+        if let Some(area) = range_rect(frame.selection, columns, rows, origin) {
             if frame.selection.cell_count() > 1 {
                 window.paint_quad(fill(area, c.selection));
             }
@@ -669,7 +702,7 @@ fn paint_selection(
         }
         if let Some(target) = frame.fill_target
             && target != frame.selection
-            && let Some(area) = range_rect(target, columns, rows, origin, z)
+            && let Some(area) = range_rect(target, columns, rows, origin)
         {
             window.paint_quad(quad(
                 area,
@@ -680,7 +713,7 @@ fn paint_selection(
                 BorderStyle::Dashed,
             ));
         }
-        if let Some(active) = range_rect(Range::single(frame.active), columns, rows, origin, z) {
+        if let Some(active) = range_rect(Range::single(frame.active), columns, rows, origin) {
             window.paint_quad(quad(
                 active,
                 px(0.0),
@@ -691,7 +724,7 @@ fn paint_selection(
             ));
         }
         for (index, reference) in frame.formula_refs.iter().enumerate() {
-            if let Some(area) = range_rect(*reference, columns, rows, origin, z) {
+            if let Some(area) = range_rect(*reference, columns, rows, origin) {
                 let color: Hsla = rgb(REFERENCE_COLORS[index % REFERENCE_COLORS.len()]).into();
                 window.paint_quad(fill(area, color.opacity(0.08)));
                 window.paint_quad(quad(
@@ -705,7 +738,7 @@ fn paint_selection(
             }
         }
         if let Some(marquee) = frame.marquee
-            && let Some(area) = range_rect(marquee, columns, rows, origin, z)
+            && let Some(area) = range_rect(marquee, columns, rows, origin)
         {
             // The copied range is usually also the selection, whose solid accent border
             // would hide accent dashes, so the ants alternate foreground over background.
@@ -727,7 +760,7 @@ fn paint_selection(
             ));
         }
         if let Some(pending) = frame.pending
-            && let Some(area) = range_rect(pending, columns, rows, origin, z)
+            && let Some(area) = range_rect(pending, columns, rows, origin)
         {
             let amber: Hsla = rgb(PENDING_COLOR).into();
             window.paint_quad(fill(area, amber.opacity(0.18)));
@@ -756,7 +789,7 @@ fn paint_headers(
 ) {
     let c = frame.colors;
     let z = frame.zoom;
-    let header_h = HEADER_HEIGHT * z;
+    let header_h = frame.header_height * z;
     let header_w = frame.row_header * z;
     window.paint_quad(fill(
         rect(origin, 0.0, 0.0, f32::from(bounds.size.width), header_h),
@@ -783,7 +816,7 @@ fn paint_headers(
         };
         window.paint_quad(fill(
             rect(origin, x + w - 1.0, 0.0, 1.0, header_h),
-            c.gridline,
+            c.header_line,
         ));
         centered_label(
             &col.letters(),
@@ -810,7 +843,7 @@ fn paint_headers(
         };
         window.paint_quad(fill(
             rect(origin, 0.0, y + h - 1.0, header_w, 1.0),
-            c.gridline,
+            c.header_line,
         ));
         centered_label(
             &row.to_string(),
@@ -831,7 +864,7 @@ fn paint_headers(
             f32::from(bounds.size.width),
             1.0,
         ),
-        c.gridline,
+        c.header_line,
     ));
     window.paint_quad(fill(
         rect(
@@ -841,7 +874,7 @@ fn paint_headers(
             1.0,
             f32::from(bounds.size.height),
         ),
-        c.gridline,
+        c.header_line,
     ));
     window.paint_quad(fill(rect(origin, 0.0, 0.0, header_w, header_h), c.header));
 }
@@ -890,8 +923,7 @@ fn paint_editor(
     cx: &mut App,
 ) {
     let c = frame.colors;
-    let Some(area) = range_rect(Range::single(editor.pos), columns, rows, origin, frame.zoom)
-    else {
+    let Some(area) = range_rect(Range::single(editor.pos), columns, rows, origin) else {
         return;
     };
     let font_size = px(BASE_FONT_SIZE * frame.zoom);
@@ -970,8 +1002,8 @@ mod tests {
                 CellPos::new(row(last), ColIdx::default()),
             )
         };
-        assert!(range_rect(corner(2, 1_000_000), &columns, &rows, origin, 1.0).is_none());
-        assert!(range_rect(corner(1, 1_000_001), &columns, &rows, origin, 1.0).is_some());
+        assert!(range_rect(corner(2, 1_000_000), &columns, &rows, origin).is_none());
+        assert!(range_rect(corner(1, 1_000_001), &columns, &rows, origin).is_some());
     }
 
     #[test]
@@ -990,7 +1022,7 @@ mod tests {
             CellPos::new(RowIdx::default(), ColIdx::clamped(1)),
             CellPos::new(RowIdx::LAST, ColIdx::clamped(1)),
         );
-        let area = range_rect(whole_column, &columns, &rows, origin, 1.0).unwrap();
+        let area = range_rect(whole_column, &columns, &rows, origin).unwrap();
         assert_eq!(f32::from(area.origin.x), 104.0);
         assert_eq!(f32::from(area.size.width), 64.0);
         assert!(f32::from(area.origin.y + area.size.height) <= 64.0 + 2.0);
@@ -998,7 +1030,7 @@ mod tests {
             CellPos::new(row(6), ColIdx::default()),
             CellPos::new(row(6), ColIdx::LAST),
         );
-        let area = range_rect(whole_row, &columns, &rows, origin, 1.0).unwrap();
+        let area = range_rect(whole_row, &columns, &rows, origin).unwrap();
         assert_eq!(f32::from(area.origin.y), 44.0);
         assert!(f32::from(area.origin.x + area.size.width) <= 168.0 + 2.0);
     }

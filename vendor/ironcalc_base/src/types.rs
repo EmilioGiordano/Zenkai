@@ -198,6 +198,8 @@ pub struct Worksheet {
     pub views: HashMap<u32, WorksheetView>,
     /// Whether or not to show the grid lines in the worksheet
     pub show_grid_lines: bool,
+    /// Whether or not to show the row numbers and column letters of the worksheet
+    pub show_row_col_headers: bool,
     pub conditional_formatting: Vec<ConditionalFormatting>,
     /// The sizes rows and columns take when they have no entry of their own.
     pub default_sizes: DefaultSizes,

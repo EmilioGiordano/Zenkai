@@ -78,6 +78,7 @@ impl<'a> Model<'a> {
             frozen_columns: 0,
             frozen_rows: 0,
             show_grid_lines: true,
+            show_row_col_headers: true,
             views,
             conditional_formatting: vec![],
             default_sizes: Default::default(),

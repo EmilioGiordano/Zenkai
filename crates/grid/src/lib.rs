@@ -14,8 +14,8 @@ mod scrollbar;
 
 pub use actions::*;
 pub use grid::{
-    Direction, EditMode, Editor, Grid, GridCell, GridEvent, MAX_TYPED_PREVIEW_CELLS, MenuTarget,
-    Selection, SheetView, ViewState, step, typed_preview,
+    Direction, EditMode, Editor, Grid, GridCell, GridEvent, Hidden, MAX_TYPED_PREVIEW_CELLS,
+    MenuTarget, Selection, SheetView, ViewState, step, typed_preview,
 };
 pub use layout::Layout;
-pub use paint::{HighContrast, PENDING_COLOR};
+pub use paint::{HighContrast, PENDING_COLOR, frozen_divider, selection_accent};

@@ -16,6 +16,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Select Visible Cells Only (Alt+;) keeps hidden rows and columns out of the next copy, so
   copying `A1:A10` with rows 3 to 5 hidden pastes 7 rows
   ([#339](https://github.com/EmilioGiordano/Zenkai/issues/339)).
+- Gridlines and Headings follow each sheet's saved view, so a file saved by Excel with them
+  off opens without them, and the View commands Gridlines, Formula Bar and Headings in the
+  command palette turn them on and off, saved back to the file (Formula Bar is remembered by
+  the app, never in a file) ([#335](https://github.com/EmilioGiordano/Zenkai/issues/335)).
 - Row Height… and Column Width… set an exact size for the selected rows or columns, in
   Excel's units (points and characters), as one undo step; zero hides them, and a selection
   of every row or column sets the size of the sheet. AutoFit row height and AutoFit column

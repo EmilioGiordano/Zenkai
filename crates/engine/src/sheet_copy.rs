@@ -28,6 +28,7 @@ pub(crate) fn copied_sheet(
         frozen_columns,
         views,
         show_grid_lines,
+        show_row_col_headers,
         conditional_formatting,
         default_sizes,
     } = sheet;
@@ -66,6 +67,7 @@ pub(crate) fn copied_sheet(
         frozen_columns: *frozen_columns,
         views: views.clone(),
         show_grid_lines: *show_grid_lines,
+        show_row_col_headers: *show_row_col_headers,
         conditional_formatting: conditional_formatting.clone(),
         default_sizes: *default_sizes,
     };

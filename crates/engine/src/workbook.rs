@@ -181,6 +181,10 @@ pub trait Engine: Send {
     fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError>;
     fn frozen(&self, sheet: SheetId) -> (u32, u16);
     fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError>;
+    fn gridlines_shown(&self, sheet: SheetId) -> bool;
+    fn set_gridlines_shown(&mut self, sheet: SheetId, shown: bool) -> Result<(), EngineError>;
+    fn headings_shown(&self, sheet: SheetId) -> bool;
+    fn set_headings_shown(&mut self, sheet: SheetId, shown: bool) -> Result<(), EngineError>;
     fn insert_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError>;
     fn delete_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError>;
     fn insert_columns(&mut self, sheet: SheetId, at: ColIdx, count: u16)
@@ -2090,6 +2094,29 @@ impl Engine for Workbook {
                 }
                 set
             })
+            .map_err(rejected)
+            .inspect(|()| self.model.count_style_edit())
+    }
+
+    // A sheet the model does not hold reads as shown, the state of a file that says nothing.
+    fn gridlines_shown(&self, sheet: SheetId) -> bool {
+        self.model.get_show_grid_lines(sheet.0).unwrap_or(true)
+    }
+
+    fn set_gridlines_shown(&mut self, sheet: SheetId, shown: bool) -> Result<(), EngineError> {
+        self.model
+            .edit_keeping_cells(|model| model.set_show_grid_lines(sheet.0, shown))
+            .map_err(rejected)
+            .inspect(|()| self.model.count_style_edit())
+    }
+
+    fn headings_shown(&self, sheet: SheetId) -> bool {
+        self.model.get_show_row_col_headers(sheet.0).unwrap_or(true)
+    }
+
+    fn set_headings_shown(&mut self, sheet: SheetId, shown: bool) -> Result<(), EngineError> {
+        self.model
+            .edit_keeping_cells(|model| model.set_show_row_col_headers(sheet.0, shown))
             .map_err(rejected)
             .inspect(|()| self.model.count_style_edit())
     }

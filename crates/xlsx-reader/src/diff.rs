@@ -132,6 +132,11 @@ impl Differences {
             &expected.show_grid_lines,
             &actual.show_grid_lines,
         );
+        self.value(
+            &field("row and column headers"),
+            &expected.show_row_col_headers,
+            &actual.show_row_col_headers,
+        );
         self.list(
             &field("conditional format"),
             &expected.conditional_formatting,

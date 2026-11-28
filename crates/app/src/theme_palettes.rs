@@ -373,6 +373,47 @@ mod tests {
         }
     }
 
+    // The background, and the muted text colour the lone frozen divider is drawn in.
+    fn ground(choice: ThemeChoice) -> (Hsla, Hsla) {
+        let hex = |value: u32| -> Hsla { rgb(value).into() };
+        match palette(choice) {
+            Some(p) => (hex(p.background), hex(p.muted_foreground)),
+            None if choice == ThemeChoice::Dark(DarkTheme::HighContrast) => {
+                (hex(0x000000), hex(0xFFFFFF))
+            }
+            None => {
+                let colors = if choice.is_dark() {
+                    ThemeColor::dark()
+                } else {
+                    ThemeColor::light()
+                };
+                (colors.background, colors.muted_foreground)
+            }
+        }
+    }
+
+    #[test]
+    fn the_lone_divider_and_the_selection_border_have_3_to_1_against_the_background() {
+        for choice in ThemeChoice::ALL {
+            let (background, muted_foreground) = ground(choice);
+            let high_contrast = choice == ThemeChoice::Dark(DarkTheme::HighContrast);
+            let lines = [
+                (
+                    "divider",
+                    zenkai_grid::frozen_divider(muted_foreground, false),
+                ),
+                (
+                    "selection border",
+                    zenkai_grid::selection_accent(choice.is_dark(), high_contrast),
+                ),
+            ];
+            for (name, line) in lines {
+                let value = ratio(line, background);
+                assert!(value >= 3.0, "{choice:?} {name}: contrast {value:.2}");
+            }
+        }
+    }
+
     #[test]
     fn text_meets_wcag_aa_in_every_theme() {
         for choice in ThemeChoice::ALL {

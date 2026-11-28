@@ -248,6 +248,11 @@ pub(crate) enum Diff {
         old: Vec<Col>,
         new: Vec<Col>,
     },
+    SetShowRowColHeaders {
+        sheet: u32,
+        old_value: bool,
+        new_value: bool,
+    },
     SetTheme {
         old_value: Box<Theme>,
         new_value: Box<Theme>,
@@ -496,6 +501,7 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
             | Diff::SetDefaultSizes { .. }
             | Diff::SetRowEntries { .. }
             | Diff::SetColumnEntries { .. }
+            | Diff::SetShowRowColHeaders { .. }
             | Diff::AddConditionalFormatting { .. }
             | Diff::DeleteConditionalFormatting { .. }
             | Diff::UpdateConditionalFormatting { .. }

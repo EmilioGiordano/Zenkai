@@ -2336,6 +2336,29 @@ impl<'a> UserModel<'a> {
         Ok(self.model.workbook.worksheet(sheet)?.show_grid_lines)
     }
 
+    /// Set the row numbers and column letters in the worksheet to visible (`true`) or hidden (`false`)
+    pub fn set_show_row_col_headers(
+        &mut self,
+        sheet: u32,
+        show_row_col_headers: bool,
+    ) -> Result<(), String> {
+        let old_value = self.model.workbook.worksheet(sheet)?.show_row_col_headers;
+        self.model
+            .set_show_row_col_headers(sheet, show_row_col_headers)?;
+
+        self.push_diff_list(vec![Diff::SetShowRowColHeaders {
+            sheet,
+            new_value: show_row_col_headers,
+            old_value,
+        }]);
+        Ok(())
+    }
+
+    /// Returns true when the row numbers and column letters of the sheet are shown
+    pub fn get_show_row_col_headers(&self, sheet: u32) -> Result<bool, String> {
+        Ok(self.model.workbook.worksheet(sheet)?.show_row_col_headers)
+    }
+
     /// Returns the largest column in the row less than a column whose cell has a non empty value.
     /// If there are none it returns `None`.
     /// This is useful when rendering a part of a worksheet to know which cells spill over

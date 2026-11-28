@@ -354,6 +354,7 @@ pub(crate) fn sheet_print(
         // The selection is not worth rewriting a sheet for.
         views: _,
         show_grid_lines,
+        show_row_col_headers,
         conditional_formatting,
         // Part of the settings the sheet writes, which `Carried::written` merges in.
         default_sizes: _,
@@ -383,7 +384,13 @@ pub(crate) fn sheet_print(
     let mut frame = DefaultHasher::new();
     hash_frame(&mut frame, cols, comments);
     (name, sheet_id, merge_cells).hash(&mut frame);
-    (frozen_rows, frozen_columns, show_grid_lines).hash(&mut frame);
+    (
+        frozen_rows,
+        frozen_columns,
+        show_grid_lines,
+        show_row_col_headers,
+    )
+        .hash(&mut frame);
     settings.hash(&mut frame);
     hash_debug(&mut frame, &(state, color, conditional_formatting))?;
     let frame = frame.finish();

@@ -115,6 +115,7 @@ impl PendingRecalculation {
                 | Diff::SetShowGridLines { .. }
                 | Diff::SetDefaultSizes { .. }
                 | Diff::SetColumnEntries { .. }
+                | Diff::SetShowRowColHeaders { .. }
                 | Diff::SetTheme { .. }
                 | Diff::SetWorkbookName { .. }
                 | Diff::CreateNamedStyle { .. }

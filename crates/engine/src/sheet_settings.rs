@@ -52,11 +52,10 @@ const OUTLINE_PROPERTIES: &[(&str, Value)] = &[
 ];
 const PAGE_SETUP_PROPERTIES: &[(&str, Value)] =
     &[("autoPageBreaks", Value::Bool), ("fitToPage", Value::Bool)];
-// IronCalc writes workbookViewId, tabSelected and showGridLines itself; repeating one
-// would make the element malformed.
+// IronCalc writes workbookViewId, tabSelected, showGridLines and showRowColHeaders itself;
+// repeating one would make the element malformed.
 const SHEET_VIEW: &[(&str, Value)] = &[
     ("showFormulas", Value::Bool),
-    ("showRowColHeaders", Value::Bool),
     ("showZeros", Value::Bool),
     ("rightToLeft", Value::Bool),
     ("showRuler", Value::Bool),
@@ -671,7 +670,7 @@ pub fn read(part: &str, budget: &mut ElementBudget) -> SheetSettings {
     let mut settings = SheetSettings {
         properties: properties(sheet),
         view: child(sheet, "sheetViews")
-            .and_then(|views| child(views, "sheetView"))
+            .and_then(main_view)
             .map(|view| attributes(view, SHEET_VIEW))
             .unwrap_or_default(),
         format: child(sheet, "sheetFormatPr").map(|format| attributes(format, SHEET_FORMAT)),
@@ -686,6 +685,18 @@ pub fn read(part: &str, budget: &mut ElementBudget) -> SheetSettings {
         read_row_outline(data, &mut settings.rows);
     }
     settings
+}
+
+// The view of the first workbook window, else the first view: the one IronCalc keeps.
+fn main_view<'a, 'input>(views: Node<'a, 'input>) -> Option<Node<'a, 'input>> {
+    let all = || {
+        views
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "sheetView")
+    };
+    all()
+        .find(|view| view.attribute("workbookViewId").map(str::trim) == Some("0"))
+        .or_else(|| all().next())
 }
 
 fn properties(sheet: Node) -> String {
