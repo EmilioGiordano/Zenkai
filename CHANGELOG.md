@@ -16,6 +16,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Select Visible Cells Only (Alt+;) keeps hidden rows and columns out of the next copy, so
   copying `A1:A10` with rows 3 to 5 hidden pastes 7 rows
   ([#339](https://github.com/EmilioGiordano/Zenkai/issues/339)).
+- The sheet tab menu has Tab color, Hide and Unhide. A tab color is a bar along the bottom
+  of the tab, chosen from the Office theme and standard colors or cleared with No color,
+  and it is saved in the file. Hide takes the active sheet out of the tab strip, and Unhide
+  lists the hidden sheets so several come back at once. Each is one undo step, and Ctrl+Page
+  Up, Ctrl+Page Down and Move left or right skip hidden sheets
+  ([#337](https://github.com/EmilioGiordano/Zenkai/issues/337)).
+- A file whose sheets are all hidden opens showing its first hidden sheet, with a notice,
+  and saves without changing any sheet state.
 
 ## [0.1.2]
 
