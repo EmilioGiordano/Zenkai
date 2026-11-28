@@ -5,6 +5,7 @@ use std::{collections::HashMap, fmt::Debug};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    auto_filter::LineMove,
     cf_types::ExtendedStyle,
     constants::{LAST_COLUMN, LAST_ROW},
     expressions::{
@@ -14,8 +15,9 @@ use crate::{
     },
     model::{FmtSettings, Model},
     types::{
-        Alignment, ArrayKind, BorderItem, Cell, CellType, Col, Color, HorizontalAlignment,
-        SheetProperties, SheetState, Style, Theme, VerticalAlignment, Workbook,
+        Alignment, ArrayKind, AutoFilter, BorderItem, Cell, CellType, Col, Color,
+        HorizontalAlignment, SheetProperties, SheetState, Style, Theme, VerticalAlignment,
+        Workbook,
     },
 };
 
@@ -1322,11 +1324,17 @@ impl<'a> UserModel<'a> {
     pub fn insert_rows(&mut self, sheet: u32, row: i32, row_count: i32) -> Result<(), String> {
         self.model.insert_rows(sheet, row, row_count)?;
 
-        let diff_list = vec![Diff::InsertRows {
+        let mut diff_list = vec![Diff::InsertRows {
             sheet,
             row,
             count: row_count,
         }];
+        self.move_auto_filter(sheet, &mut diff_list, |filter| {
+            filter.with_rows_moved(LineMove::Insert {
+                at: row,
+                count: row_count,
+            })
+        })?;
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
         Ok(())
@@ -1352,11 +1360,17 @@ impl<'a> UserModel<'a> {
     ) -> Result<(), String> {
         self.model.insert_columns(sheet, column, column_count)?;
 
-        let diff_list = vec![Diff::InsertColumns {
+        let mut diff_list = vec![Diff::InsertColumns {
             sheet,
             column,
             count: column_count,
         }];
+        self.move_auto_filter(sheet, &mut diff_list, |filter| {
+            filter.with_columns_moved(LineMove::Insert {
+                at: column,
+                count: column_count,
+            })
+        })?;
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
         Ok(())
@@ -1403,12 +1417,18 @@ impl<'a> UserModel<'a> {
 
         self.model.delete_rows(sheet, row, row_count)?;
 
-        let diff_list = vec![Diff::DeleteRows {
+        let mut diff_list = vec![Diff::DeleteRows {
             sheet,
             row,
             count: row_count,
             old_data,
         }];
+        self.move_auto_filter(sheet, &mut diff_list, |filter| {
+            filter.with_rows_moved(LineMove::Delete {
+                at: row,
+                count: row_count,
+            })
+        })?;
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
         Ok(())
@@ -1468,12 +1488,18 @@ impl<'a> UserModel<'a> {
 
         self.model.delete_columns(sheet, column, column_count)?;
 
-        let diff_list = vec![Diff::DeleteColumns {
+        let mut diff_list = vec![Diff::DeleteColumns {
             sheet,
             column,
             count: column_count,
             old_data,
         }];
+        self.move_auto_filter(sheet, &mut diff_list, |filter| {
+            filter.with_columns_moved(LineMove::Delete {
+                at: column,
+                count: column_count,
+            })
+        })?;
         self.push_diff_list(diff_list);
         self.evaluate_if_not_paused();
         Ok(())
@@ -2244,6 +2270,95 @@ impl<'a> UserModel<'a> {
     /// Returns true when the row numbers and column letters of the sheet are shown
     pub fn get_show_row_col_headers(&self, sheet: u32) -> Result<bool, String> {
         Ok(self.model.workbook.worksheet(sheet)?.show_row_col_headers)
+    }
+
+    /// Gives the sheet an AutoFilter, or removes it with `None`, as one diff. No row is
+    /// hidden or shown; see [UserModel::set_scattered_rows_hidden].
+    pub fn set_auto_filter(
+        &mut self,
+        sheet: u32,
+        auto_filter: Option<AutoFilter>,
+    ) -> Result<(), String> {
+        let old_value = self.model.workbook.worksheet(sheet)?.auto_filter.clone();
+        self.model.set_auto_filter(sheet, auto_filter.clone())?;
+        self.push_diff_list(vec![Diff::SetAutoFilter {
+            sheet,
+            old_value: old_value.map(Box::new),
+            new_value: auto_filter.map(Box::new),
+        }]);
+        // SUBTOTAL skips the rows a filter hides.
+        self.evaluate_if_not_paused();
+        Ok(())
+    }
+
+    /// Returns the AutoFilter of the sheet, if it has one
+    pub fn get_auto_filter(&self, sheet: u32) -> Result<Option<&AutoFilter>, String> {
+        Ok(self.model.workbook.worksheet(sheet)?.auto_filter.as_ref())
+    }
+
+    /// Hides (`true`) or shows (`false`) each listed row as one diff, in time proportional
+    /// to the rows of the sheet and those listed; the last entry for a row counts. Rows
+    /// already in that state are left out.
+    pub fn set_scattered_rows_hidden(
+        &mut self,
+        sheet: u32,
+        rows: &[(i32, bool)],
+    ) -> Result<(), String> {
+        if let Some((row, _)) = rows.iter().find(|(row, _)| !is_valid_row(*row)) {
+            return Err(format!("Row number '{row}' is not valid."));
+        }
+        let wanted: HashMap<i32, bool> = rows.iter().copied().collect();
+        let current = self.model.workbook.worksheet(sheet)?.hidden_by_row();
+        let mut flipped = Vec::new();
+        let mut created = Vec::new();
+        for (row, hidden) in wanted {
+            match current.get(&row) {
+                Some(now) if *now != hidden => flipped.push(row),
+                None if hidden => {
+                    created.push(row);
+                    flipped.push(row);
+                }
+                _ => {}
+            }
+        }
+        if flipped.is_empty() {
+            return Ok(());
+        }
+        flipped.sort_unstable();
+        created.sort_unstable();
+        let worksheet = self.model.workbook.worksheet_mut(sheet)?;
+        worksheet.add_default_rows(&created);
+        worksheet.flip_rows_hidden(&flipped);
+        self.push_diff_list(vec![Diff::FlipRowsHidden {
+            sheet,
+            rows: flipped,
+            created,
+        }]);
+        // SUBTOTAL skips hidden rows, as Excel's does.
+        self.evaluate_if_not_paused();
+        Ok(())
+    }
+
+    // The filter follows inserted and deleted rows and columns as a diff of its own after
+    // the move's. Replaying a move never touches the filter, so undo and redo give back
+    // exactly the filter each side had.
+    fn move_auto_filter(
+        &mut self,
+        sheet: u32,
+        diff_list: &mut DiffList,
+        moved: impl FnOnce(&AutoFilter) -> Option<AutoFilter>,
+    ) -> Result<(), String> {
+        let old_value = self.model.workbook.worksheet(sheet)?.auto_filter.clone();
+        let new_value = old_value.as_ref().and_then(moved);
+        if new_value != old_value {
+            self.model.set_auto_filter(sheet, new_value.clone())?;
+            diff_list.push(Diff::SetAutoFilter {
+                sheet,
+                old_value: old_value.map(Box::new),
+                new_value: new_value.map(Box::new),
+            });
+        }
+        Ok(())
     }
 
     /// Returns the largest column in the row less than a column whose cell has a non empty value.

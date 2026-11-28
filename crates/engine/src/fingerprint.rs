@@ -356,6 +356,7 @@ pub(crate) fn sheet_print(
         show_grid_lines,
         show_row_col_headers,
         conditional_formatting,
+        auto_filter,
     } = sheet;
     let formulas = formula_hashes(formulas)?;
     let (shares, ()) = over_rows(
@@ -390,7 +391,10 @@ pub(crate) fn sheet_print(
     )
         .hash(&mut frame);
     settings.hash(&mut frame);
-    hash_debug(&mut frame, &(state, color, conditional_formatting))?;
+    hash_debug(
+        &mut frame,
+        &(state, color, conditional_formatting, auto_filter),
+    )?;
     let frame = frame.finish();
     let mut hasher = DefaultHasher::new();
     (frame, cells).hash(&mut hasher);

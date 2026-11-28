@@ -5,7 +5,9 @@ use bitcode::{Decode, Encode};
 use crate::{
     cf_types::CfRule,
     expressions::types::Area,
-    types::{Cell, Col, Color, Row, SheetState, Style, StyleIncludes, Theme, Worksheet},
+    types::{
+        AutoFilter, Cell, Col, Color, Row, SheetState, Style, StyleIncludes, Theme, Worksheet,
+    },
 };
 
 #[derive(Clone, Encode, Decode)]
@@ -215,6 +217,18 @@ pub(crate) enum Diff {
         sheet: u32,
         old_value: bool,
         new_value: bool,
+    },
+    SetAutoFilter {
+        sheet: u32,
+        old_value: Option<Box<AutoFilter>>,
+        new_value: Option<Box<AutoFilter>>,
+    },
+    // The rows whose hidden flag the step flips. `created` lists those of them that had no
+    // entry and got the one hiding a row gives, which undo removes again.
+    FlipRowsHidden {
+        sheet: u32,
+        rows: Vec<i32>,
+        created: Vec<i32>,
     },
     SetTheme {
         old_value: Box<Theme>,
@@ -462,6 +476,8 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
             | Diff::SetFrozenColumnsCount { .. }
             | Diff::SetShowGridLines { .. }
             | Diff::SetShowRowColHeaders { .. }
+            | Diff::SetAutoFilter { .. }
+            | Diff::FlipRowsHidden { .. }
             | Diff::AddConditionalFormatting { .. }
             | Diff::DeleteConditionalFormatting { .. }
             | Diff::UpdateConditionalFormatting { .. }

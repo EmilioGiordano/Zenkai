@@ -1238,6 +1238,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
             show_row_col_headers: sheet_view.show_row_col_headers,
             views,
             conditional_formatting,
+            auto_filter: None,
         },
         sheet_view.is_selected,
     ))

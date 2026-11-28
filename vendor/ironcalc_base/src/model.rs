@@ -1289,6 +1289,23 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
+    /// Gives the sheet an AutoFilter, or removes it with `None`. The rows it lists as
+    /// filtered are not hidden or shown here.
+    pub fn set_auto_filter(
+        &mut self,
+        sheet: u32,
+        auto_filter: Option<AutoFilter>,
+    ) -> Result<(), String> {
+        if auto_filter
+            .as_ref()
+            .is_some_and(|filter| !filter.is_valid())
+        {
+            return Err("Invalid AutoFilter".to_string());
+        }
+        self.workbook.worksheet_mut(sheet)?.auto_filter = auto_filter;
+        Ok(())
+    }
+
     /// Makes the row numbers and column letters of the sheet visible (`true`) or hidden (`false`)
     pub fn set_show_row_col_headers(
         &mut self,

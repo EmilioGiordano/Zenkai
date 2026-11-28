@@ -221,6 +221,7 @@ pub(crate) fn row_job(
         show_grid_lines: sheet.show_grid_lines,
         show_row_col_headers: sheet.show_row_col_headers,
         conditional_formatting: Vec::new(),
+        auto_filter: None,
     };
     for span in &spans {
         for row in span_rows(span) {
