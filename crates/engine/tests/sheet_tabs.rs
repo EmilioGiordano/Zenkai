@@ -691,3 +691,14 @@ fn clearing_a_color_set_on_a_sheet_that_opened_with_an_automatic_one_removes_the
         );
     }
 }
+
+#[test]
+fn every_undo_is_counted_and_a_redo_is_not() {
+    let mut book = three_sheets();
+    book.hide_sheet(SheetId(1)).unwrap();
+    assert_eq!(book.undo_count(), 0);
+    book.undo().unwrap();
+    assert_eq!(book.undo_count(), 1);
+    book.redo().unwrap();
+    assert_eq!(book.undo_count(), 1);
+}

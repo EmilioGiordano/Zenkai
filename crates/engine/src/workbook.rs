@@ -183,6 +183,9 @@ pub struct Workbook {
     pub(crate) saved: SavedSlot,
     // What the file held when it was opened, for a save that knows nothing newer.
     pub(crate) opened: Vec<Unsupported>,
+    // Undos taken since the workbook was built or woken, so a caller that reads the sheets
+    // after a batch can tell an undo from a command.
+    pub(crate) undos: u64,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -656,6 +659,7 @@ impl Workbook {
             carried: Carried::default(),
             saved: SavedSlot::default(),
             opened: Vec::new(),
+            undos: 0,
         })
     }
 
@@ -691,6 +695,10 @@ impl Workbook {
             );
         }
         evaluated(model, carried, saved, opened.to_vec())
+    }
+
+    pub fn undo_count(&self) -> u64 {
+        self.undos
     }
 
     fn is_only_visible(&self, sheet: SheetId) -> bool {
@@ -896,6 +904,9 @@ impl Workbook {
             .step(step, |model, take| profiled(model, take))
             .map_err(rejected);
         self.history_replayed(moved, profile.is_ok(), step);
+        if matches!(step, HistoryStep::Undo) {
+            self.undos += 1;
+        }
         self.keep_selection_visible();
         Ok(self.warmed(profile?))
     }
@@ -1793,6 +1804,7 @@ impl Engine for Workbook {
             .step(HistoryStep::Undo, |model, take| take(model))
             .map_err(rejected);
         self.history_replayed(moved, undone.is_ok(), HistoryStep::Undo);
+        self.undos += 1;
         self.keep_selection_visible();
         undone
     }
@@ -2469,6 +2481,7 @@ fn warmed(
         carried,
         saved,
         opened,
+        undos: 0,
     };
     tracing::info_span!("open_warm_used_areas").in_scope(|| workbook.warm_used_areas());
     workbook
