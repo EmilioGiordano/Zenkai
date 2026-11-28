@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use zenkai_engine::FormatEdits;
 use zenkai_formats::{
     CsvFormat, DateOrder, DecimalMark, Delimiter, Encoding, Guess, LineEnding, ParsedCsv,
-    TextColumns,
+    TextColumns, find_at_risk, guess,
 };
 use zenkai_types::LoggedChange;
 
@@ -50,6 +50,15 @@ impl CsvOptions {
             decimal_mark: reading.decimal_mark,
             date_order: reading.date_order,
             text: TextColumns::default(),
+        }
+    }
+
+    // How a file is read when nothing was stored for it: what the preview would have guessed and
+    // chosen by itself, so the same file opens the same way whichever way it was opened.
+    pub fn detected(parsed: &ParsedCsv) -> CsvOptions {
+        CsvOptions {
+            text: TextColumns::chosen(find_at_risk(&parsed.rows).iter().map(|risk| risk.column)),
+            ..CsvOptions::from_read(parsed, &guess(parsed))
         }
     }
 
@@ -192,6 +201,13 @@ impl CsvBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn chosen_columns(columns: &[u16]) -> TextColumns {
+        TextColumns::chosen(
+            columns
+                .iter()
+                .filter_map(|column| zenkai_types::ColIdx::new(*column)),
+        )
+    }
 
     #[test]
     fn a_binding_survives_the_session_file() {
@@ -217,7 +233,7 @@ mod tests {
                             line_ending,
                             decimal_mark: DecimalMark::Comma,
                             date_order: DateOrder::DayFirst,
-                            text: TextColumns::chosen([0, 2]),
+                            text: chosen_columns(&[0, 2]),
                         }),
                         accepted: Losses {
                             formatting: true,
@@ -273,7 +289,7 @@ mod tests {
     fn the_text_choices_survive_the_session_file_each_way() {
         for text in [
             TextColumns::default(),
-            TextColumns::chosen([0, 5, 16_383]),
+            chosen_columns(&[0, 5, 16_383]),
             TextColumns::Everything,
         ] {
             let options = CsvOptions {
@@ -303,5 +319,20 @@ mod tests {
                 .options
                 .is_some_and(|options| options.text.is_empty())
         );
+    }
+
+    #[test]
+    fn a_hand_edited_list_of_columns_is_sorted_and_cleaned_when_it_is_read() {
+        let read: TextColumns = serde_json::from_str(r#"{"chosen":[9,2,2,40000,0]}"#).unwrap();
+        assert_eq!(read, chosen_columns(&[0, 2, 9]));
+        assert!(read.holds_field(9) && read.holds_field(0) && !read.holds_field(3));
+    }
+
+    #[test]
+    fn a_file_read_with_nothing_stored_has_its_id_columns_as_text() {
+        let parsed = zenkai_formats::parse_csv(b"name,code\nAna,00123\n", None).unwrap();
+        let options = CsvOptions::detected(&parsed);
+        assert_eq!(options.text, chosen_columns(&[1]));
+        assert_eq!(options.delimiter, Delimiter::Comma);
     }
 }

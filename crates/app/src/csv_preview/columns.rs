@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
 use zenkai_formats::{AtRisk, DateOrder, DecimalMark, TextColumns, number_value, read_field};
-use zenkai_types::ColIdx;
+use zenkai_types::{ColIdx, MAX_COLS};
 
 pub const SAMPLE_ROWS: usize = 12;
 
+// What the preview keeps of a field: a cell shows a few dozen characters and a title two lines,
+// so a field of any length is cut here, once, where the columns are built.
+const SAMPLE_CHARACTERS: usize = 200;
 const MIN_WIDTH: usize = 96;
 const MAX_WIDTH: usize = 216;
 const WIDTH_PER_CHARACTER: usize = 8;
@@ -28,21 +31,15 @@ impl Format {
 
 // What the preview knows of one column of the file, from its first rows alone.
 pub struct Column {
+    pub index: ColIdx,
     pub letter: String,
     // Its row 1 value, when that is not a number.
     pub name: Option<String>,
     pub risk: Option<AtRisk>,
-    // The raw fields of the sample rows, as the file has them.
+    // The fields of the sample rows as the file has them, cut at SAMPLE_CHARACTERS.
     pub sample: Vec<String>,
     // In pixels at the interface scale of 100 percent.
     pub width: f32,
-}
-
-pub fn letter_of(index: usize) -> String {
-    u16::try_from(index)
-        .ok()
-        .and_then(ColIdx::new)
-        .map_or_else(|| (index + 1).to_string(), ColIdx::letters)
 }
 
 fn named_by(first_row: &str) -> Option<String> {
@@ -60,20 +57,30 @@ fn width_of(sample: &[String]) -> f32 {
     (longest * WIDTH_PER_CHARACTER + WIDTH_PADDING).clamp(MIN_WIDTH, MAX_WIDTH) as f32
 }
 
+// A sheet has no columns past MAX_COLS, so the preview has none either; the import says why a
+// file that wide cannot be opened.
 pub fn columns_of(rows: &[Vec<String>], count: usize, at_risk: Vec<AtRisk>) -> Vec<Column> {
-    let mut risks: BTreeMap<usize, AtRisk> = at_risk
+    let mut risks: BTreeMap<ColIdx, AtRisk> = at_risk
         .into_iter()
         .map(|risk| (risk.column, risk))
         .collect();
     let sample_rows = &rows[..rows.len().min(SAMPLE_ROWS)];
+    let count = u16::try_from(count).unwrap_or(MAX_COLS).min(MAX_COLS);
     (0..count)
+        .filter_map(ColIdx::new)
         .map(|index| {
+            let position = usize::from(index.get());
             let sample: Vec<String> = sample_rows
                 .iter()
-                .map(|row| row.get(index).cloned().unwrap_or_default())
+                .map(|row| {
+                    row.get(position)
+                        .map(|field| field.chars().take(SAMPLE_CHARACTERS).collect())
+                        .unwrap_or_default()
+                })
                 .collect();
             Column {
-                letter: letter_of(index),
+                index,
+                letter: index.letters(),
                 name: sample.first().and_then(|first| named_by(first)),
                 risk: risks.remove(&index),
                 width: width_of(&sample),
@@ -106,16 +113,16 @@ pub fn detected_formats(columns: &[Column]) -> Vec<Format> {
 
 // The columns the import reads as text: all of them with Keep everything as text, else those
 // the user left as Text.
-pub fn text_columns(formats: &[Format], keep_all: bool) -> TextColumns {
+pub fn text_columns(columns: &[Column], formats: &[Format], keep_all: bool) -> TextColumns {
     if keep_all {
         TextColumns::Everything
     } else {
         TextColumns::chosen(
-            formats
+            columns
                 .iter()
-                .enumerate()
+                .zip(formats)
                 .filter(|(_, format)| **format == Format::Text)
-                .map(|(index, _)| index),
+                .map(|(column, _)| column.index),
         )
     }
 }
@@ -240,21 +247,40 @@ mod tests {
         );
     }
 
+    fn chosen(columns: &[u16]) -> TextColumns {
+        TextColumns::chosen(columns.iter().filter_map(|column| ColIdx::new(*column)))
+    }
+
     #[test]
     fn the_import_reads_as_text_the_flagged_columns_the_user_kept_or_every_column() {
         let columns = built(&[&["id", "n", "code"], &["007", "5", "0099"]]);
         let mut formats = detected_formats(&columns);
-        assert_eq!(text_columns(&formats, false), TextColumns::chosen([0, 2]));
+        assert_eq!(text_columns(&columns, &formats, false), chosen(&[0, 2]));
         formats[0] = Format::General;
         formats[1] = Format::Text;
-        assert_eq!(text_columns(&formats, false), TextColumns::chosen([1, 2]));
-        assert_eq!(text_columns(&formats, true), TextColumns::Everything);
+        assert_eq!(text_columns(&columns, &formats, false), chosen(&[1, 2]));
+        assert_eq!(
+            text_columns(&columns, &formats, true),
+            TextColumns::Everything
+        );
     }
 
     #[test]
-    fn a_column_past_the_last_letter_has_a_number_for_a_name() {
-        assert_eq!(letter_of(0), "A");
-        assert_eq!(letter_of(26), "AA");
-        assert_eq!(letter_of(20_000), "20001");
+    fn a_file_wider_than_a_sheet_has_the_columns_a_sheet_has() {
+        let columns = columns_of(&[], 20_000, Vec::new());
+        assert_eq!(columns.len(), usize::from(MAX_COLS));
+        assert_eq!(columns[26].letter, "AA");
+        assert_eq!(columns[0].index, ColIdx::clamped(0));
+    }
+
+    #[test]
+    fn a_field_of_any_length_is_cut_where_the_columns_are_built() {
+        let long = "x".repeat(50_000);
+        let columns = built(&[&[long.as_str()], &[long.as_str()]]);
+        assert_eq!(columns[0].sample[1].chars().count(), SAMPLE_CHARACTERS);
+        assert_eq!(
+            columns[0].name.as_ref().map(|name| name.chars().count()),
+            Some(SAMPLE_CHARACTERS)
+        );
     }
 }

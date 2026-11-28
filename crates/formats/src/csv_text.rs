@@ -2,18 +2,49 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use zenkai_types::ColIdx;
 
 const LONG_NUMBER_DIGITS: usize = 16;
 const EXAMPLE_CHARS: usize = 24;
 
-// The columns a CSV import keeps as text, every field exactly as written. Columns are the
-// file's own, counted from zero.
+// The columns a CSV import keeps as text, every field exactly as written.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(from = "Stored", into = "Stored")]
 pub enum TextColumns {
     // Sorted and without repeats.
+    Chosen(Vec<ColIdx>),
+    Everything,
+}
+
+// How the choice is written in a session file. What it names is made a valid choice on the way
+// in, so a file edited by hand cannot unsort the list that `holds` searches.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Stored {
     Chosen(Vec<u16>),
     Everything,
+}
+
+impl From<Stored> for TextColumns {
+    fn from(stored: Stored) -> TextColumns {
+        match stored {
+            Stored::Everything => TextColumns::Everything,
+            Stored::Chosen(columns) => {
+                TextColumns::chosen(columns.into_iter().filter_map(ColIdx::new))
+            }
+        }
+    }
+}
+
+impl From<TextColumns> for Stored {
+    fn from(columns: TextColumns) -> Stored {
+        match columns {
+            TextColumns::Everything => Stored::Everything,
+            TextColumns::Chosen(columns) => {
+                Stored::Chosen(columns.into_iter().map(ColIdx::get).collect())
+            }
+        }
+    }
 }
 
 impl Default for TextColumns {
@@ -22,22 +53,32 @@ impl Default for TextColumns {
     }
 }
 
+// Fields past the last column of a sheet are never imported, so they belong to no column.
+fn column_of(index: usize) -> Option<ColIdx> {
+    u16::try_from(index).ok().and_then(ColIdx::new)
+}
+
 impl TextColumns {
-    pub fn chosen(columns: impl IntoIterator<Item = usize>) -> TextColumns {
-        let mut columns: Vec<u16> = columns
-            .into_iter()
-            .filter_map(|column| u16::try_from(column).ok())
-            .collect();
+    pub fn chosen(columns: impl IntoIterator<Item = ColIdx>) -> TextColumns {
+        let mut columns: Vec<ColIdx> = columns.into_iter().collect();
         columns.sort_unstable();
         columns.dedup();
         TextColumns::Chosen(columns)
     }
 
-    pub fn holds(&self, column: usize) -> bool {
+    pub fn holds(&self, column: ColIdx) -> bool {
+        match self {
+            TextColumns::Everything => true,
+            TextColumns::Chosen(columns) => columns.binary_search(&column).is_ok(),
+        }
+    }
+
+    // Whether the field at `index` of a row is in a column read as text.
+    pub fn holds_field(&self, index: usize) -> bool {
         match self {
             TextColumns::Everything => true,
             TextColumns::Chosen(columns) => {
-                u16::try_from(column).is_ok_and(|column| columns.binary_search(&column).is_ok())
+                !columns.is_empty() && column_of(index).is_some_and(|column| self.holds(column))
             }
         }
     }
@@ -59,7 +100,7 @@ pub struct Example {
 // reason it has.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AtRisk {
-    pub column: usize,
+    pub column: ColIdx,
     pub leading_zero: Option<Example>,
     pub long_number: Option<Example>,
 }
@@ -90,9 +131,12 @@ fn example(field: &str, index: usize) -> Example {
 
 // Scans every row, so callers run it off the UI thread. Sorted by column.
 pub fn find_at_risk(rows: &[Vec<String>]) -> Vec<AtRisk> {
-    let mut found: BTreeMap<usize, AtRisk> = BTreeMap::new();
+    let mut found: BTreeMap<ColIdx, AtRisk> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
-        for (column, field) in row.iter().enumerate() {
+        for (position, field) in row.iter().enumerate() {
+            let Some(column) = column_of(position) else {
+                break;
+            };
             let Risks {
                 leading_zero,
                 long_number,
@@ -130,6 +174,10 @@ pub fn text_input(field: &str) -> Cow<'_, str> {
 mod tests {
     use super::*;
 
+    fn col(index: u16) -> ColIdx {
+        ColIdx::new(index).unwrap()
+    }
+
     fn rows(lines: &[&[&str]]) -> Vec<Vec<String>> {
         lines
             .iter()
@@ -142,7 +190,7 @@ mod tests {
         for field in ["00123", "0123", "00", "01", " 0123 "] {
             let found = find_at_risk(&rows(&[&["id"], &[field]]));
             assert_eq!(found.len(), 1, "{field}");
-            assert_eq!(found[0].column, 0);
+            assert_eq!(found[0].column, col(0));
             assert_eq!(found[0].leading_zero.as_ref().unwrap().row, 2, "{field}");
         }
     }
@@ -186,7 +234,7 @@ mod tests {
         ]));
         assert_eq!(found.len(), 1);
         let column = &found[0];
-        assert_eq!(column.column, 0);
+        assert_eq!(column.column, col(0));
         assert_eq!(
             column.leading_zero,
             Some(Example {
@@ -206,7 +254,10 @@ mod tests {
     #[test]
     fn a_field_with_both_reasons_records_both_and_columns_come_sorted() {
         let found = find_at_risk(&rows(&[&["x", "0000000000000001"], &["0123", "y"]]));
-        assert_eq!(found.iter().map(|c| c.column).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(
+            found.iter().map(|c| c.column).collect::<Vec<_>>(),
+            [col(0), col(1)]
+        );
         assert!(found[1].leading_zero.is_some() && found[1].long_number.is_some());
     }
 
@@ -219,11 +270,14 @@ mod tests {
 
     #[test]
     fn chosen_columns_are_sorted_without_repeats_and_everything_holds_all() {
-        let chosen = TextColumns::chosen([3, 1, 3, 70_000]);
-        assert_eq!(chosen, TextColumns::Chosen(vec![1, 3]));
-        assert!(chosen.holds(1) && chosen.holds(3));
-        assert!(!chosen.holds(0) && !chosen.holds(2) && !chosen.holds(70_000));
-        assert!(TextColumns::Everything.holds(0) && TextColumns::Everything.holds(16_383));
+        let chosen = TextColumns::chosen([col(3), col(1), col(3)]);
+        assert_eq!(chosen, TextColumns::Chosen(vec![col(1), col(3)]));
+        assert!(chosen.holds(col(1)) && chosen.holds(col(3)));
+        assert!(!chosen.holds(col(0)) && !chosen.holds(col(2)));
+        assert!(chosen.holds_field(3) && !chosen.holds_field(2) && !chosen.holds_field(70_000));
+        assert!(
+            TextColumns::Everything.holds(col(0)) && TextColumns::Everything.holds_field(70_000)
+        );
         assert!(TextColumns::default().is_empty());
         assert!(!chosen.is_empty() && !TextColumns::Everything.is_empty());
     }

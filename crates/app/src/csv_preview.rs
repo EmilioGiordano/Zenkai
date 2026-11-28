@@ -13,7 +13,7 @@ use std::sync::Arc;
 use gpui_kit::component::VirtualListScrollHandle;
 use gpui_kit::*;
 use zenkai_formats::{
-    AtRisk, DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, find_at_risk, guess, parse_csv,
+    DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, find_at_risk, guess, parse_csv,
 };
 use zenkai_i18n::t;
 
@@ -37,15 +37,17 @@ pub fn delimiter_label(delimiter: Delimiter) -> &'static str {
 pub struct Reading {
     parsed: ParsedCsv,
     guess: Guess,
-    at_risk: Vec<AtRisk>,
+    columns: Vec<Column>,
 }
 
 impl Reading {
     pub fn of(parsed: ParsedCsv) -> Reading {
+        let guess = guess(&parsed);
+        let columns = columns_of(&parsed.rows, guess.columns, find_at_risk(&parsed.rows));
         Reading {
-            guess: guess(&parsed),
-            at_risk: find_at_risk(&parsed.rows),
             parsed,
+            guess,
+            columns,
         }
     }
 }
@@ -113,9 +115,8 @@ impl CsvPreview {
         let Reading {
             parsed,
             guess,
-            at_risk,
+            columns,
         } = reading;
-        let columns = columns_of(&parsed.rows, guess.columns, at_risk);
         let formats = detected_formats(&columns);
         let selected = first_selected(&columns);
         let columns_scroll = VirtualListScrollHandle::new();
@@ -151,9 +152,9 @@ impl CsvPreview {
         let Reading {
             parsed,
             guess,
-            at_risk,
+            columns,
         } = reading;
-        self.columns = columns_of(&parsed.rows, guess.columns, at_risk);
+        self.columns = columns;
         self.formats = detected_formats(&self.columns);
         self.selected = first_selected(&self.columns);
         self.columns_scroll
@@ -169,13 +170,15 @@ impl CsvPreview {
     }
 
     pub fn take_import(&mut self) -> Import {
+        // A read of the file that comes back after this would put columns over rows it did not make.
+        self.request += 1;
         let rows = std::mem::take(&mut self.parsed.rows);
         let parsed = ParsedCsv {
             rows,
             ..self.parsed.clone()
         };
         let options = CsvOptions {
-            text: text_columns(&self.formats, self.keep_all),
+            text: text_columns(&self.columns, &self.formats, self.keep_all),
             ..CsvOptions::from_read(&parsed, &self.guess)
         };
         Import {

@@ -10,7 +10,7 @@ use zenkai_engine::{
 };
 use zenkai_formats::{
     CsvError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv, TextColumns,
-    apply, guess, import_input, parse_csv, text_input,
+    apply, import_input, parse_csv, text_input,
 };
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, MAX_ROWS, RowIdx, SheetId};
@@ -86,7 +86,7 @@ pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
 
 pub fn detect_csv_options(path: &Path) -> Result<CsvOptions, String> {
     let read = read_csv(path)?;
-    Ok(CsvOptions::from_read(&read.parsed, &guess(&read.parsed)))
+    Ok(CsvOptions::detected(&read.parsed))
 }
 
 pub struct Baseline {
@@ -142,7 +142,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
             line_ending: parsed.line_ending,
             ..stored
         },
-        None => CsvOptions::from_read(&parsed, &guess(&parsed)),
+        None => CsvOptions::detected(&parsed),
     };
     let mut rows = parsed.rows;
     apply(
@@ -176,7 +176,7 @@ pub fn workbook_from_rows(
 ) -> Result<Workbook, String> {
     for row in &mut rows {
         for (column, field) in row.iter_mut().enumerate() {
-            let input = if text.holds(column) {
+            let input = if text.holds_field(column) {
                 text_input(field)
             } else {
                 import_input(field)

@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::csv_format::{Delimiter, ParsedCsv};
 use crate::csv_text::TextColumns;
-use crate::dates::{DateOrder, day_first_field, detect_date_order, normalize_day_first};
-use crate::numbers::{
-    decimal_comma_field, detect_decimal_comma, normalize_decimal_comma, number_value,
-};
+use crate::dates::{DateOrder, day_first_field, detect_date_order};
+use crate::numbers::{decimal_comma_field, detect_decimal_comma, number_value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,18 +42,9 @@ pub fn apply(
     text: &TextColumns,
     rows: &mut [Vec<String>],
 ) {
-    if text.is_empty() {
-        if date_order == DateOrder::DayFirst {
-            normalize_day_first(rows);
-        }
-        if decimal_mark == DecimalMark::Comma {
-            normalize_decimal_comma(rows);
-        }
-        return;
-    }
     for row in rows {
-        for (column, field) in row.iter_mut().enumerate() {
-            if text.holds(column) {
+        for (index, field) in row.iter_mut().enumerate() {
+            if text.holds_field(index) {
                 continue;
             }
             if let Some(rewritten) = read_field(decimal_mark, date_order, field) {
@@ -120,6 +109,7 @@ mod tests {
     use super::*;
     use crate::csv_format::parse_csv;
     use crate::numbers::decimal_comma_field;
+    use zenkai_types::ColIdx;
 
     #[test]
     fn a_semicolon_file_with_decimal_commas_reads_numbers_and_dates_that_way() {
@@ -238,7 +228,7 @@ mod tests {
             ],
         ];
         let mut rows = original.clone();
-        let text = TextColumns::chosen([0]);
+        let text = TextColumns::chosen([ColIdx::clamped(0)]);
         apply(DecimalMark::Comma, DateOrder::DayFirst, &text, &mut rows);
         assert_eq!(rows[0], ["1,5", "1.5", "2026-10-08"]);
         assert_eq!(rows[1], ["08/10/2026", "2.25", "x"]);
