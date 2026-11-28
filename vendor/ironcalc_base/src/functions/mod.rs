@@ -2295,8 +2295,8 @@ impl Function {
     }
 }
 
-/// English names of the functions the model evaluates. The FORECAST.ETS family is
-/// recognized but always returns #N/IMPL!, so it is left out.
+// The FORECAST.ETS family is recognized but its stubs always return #N/IMPL!, so the names
+// a caller may offer leave it out.
 pub fn implemented_function_names() -> Vec<String> {
     let language = get_default_language();
     Function::into_iter()
