@@ -279,7 +279,7 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
         }
 
         for merge in &merges {
-            let Some(area) = range_rect(*merge, &columns, &rows, origin, z) else {
+            let Some(area) = range_rect(*merge, &columns, &rows, origin) else {
                 continue;
             };
             let cell = frame.cells.get(&merge.start);
@@ -622,7 +622,6 @@ fn range_rect(
     columns: &Columns,
     rows: &Rows,
     origin: Point<Pixels>,
-    z: f32,
 ) -> Option<Bounds<Pixels>> {
     let first_col = columns.xs.first()?;
     let last_col = columns.xs.last()?;
@@ -670,7 +669,7 @@ fn paint_selection(
         ),
     );
     window.with_content_mask(Some(ContentMask { bounds: body }), |window| {
-        if let Some(area) = range_rect(frame.selection, columns, rows, origin, z) {
+        if let Some(area) = range_rect(frame.selection, columns, rows, origin) {
             if frame.selection.cell_count() > 1 {
                 window.paint_quad(fill(area, c.selection));
             }
@@ -703,7 +702,7 @@ fn paint_selection(
         }
         if let Some(target) = frame.fill_target
             && target != frame.selection
-            && let Some(area) = range_rect(target, columns, rows, origin, z)
+            && let Some(area) = range_rect(target, columns, rows, origin)
         {
             window.paint_quad(quad(
                 area,
@@ -714,7 +713,7 @@ fn paint_selection(
                 BorderStyle::Dashed,
             ));
         }
-        if let Some(active) = range_rect(Range::single(frame.active), columns, rows, origin, z) {
+        if let Some(active) = range_rect(Range::single(frame.active), columns, rows, origin) {
             window.paint_quad(quad(
                 active,
                 px(0.0),
@@ -725,7 +724,7 @@ fn paint_selection(
             ));
         }
         for (index, reference) in frame.formula_refs.iter().enumerate() {
-            if let Some(area) = range_rect(*reference, columns, rows, origin, z) {
+            if let Some(area) = range_rect(*reference, columns, rows, origin) {
                 let color: Hsla = rgb(REFERENCE_COLORS[index % REFERENCE_COLORS.len()]).into();
                 window.paint_quad(fill(area, color.opacity(0.08)));
                 window.paint_quad(quad(
@@ -739,7 +738,7 @@ fn paint_selection(
             }
         }
         if let Some(marquee) = frame.marquee
-            && let Some(area) = range_rect(marquee, columns, rows, origin, z)
+            && let Some(area) = range_rect(marquee, columns, rows, origin)
         {
             // The copied range is usually also the selection, whose solid accent border
             // would hide accent dashes, so the ants alternate foreground over background.
@@ -761,7 +760,7 @@ fn paint_selection(
             ));
         }
         if let Some(pending) = frame.pending
-            && let Some(area) = range_rect(pending, columns, rows, origin, z)
+            && let Some(area) = range_rect(pending, columns, rows, origin)
         {
             let amber: Hsla = rgb(PENDING_COLOR).into();
             window.paint_quad(fill(area, amber.opacity(0.18)));
@@ -924,8 +923,7 @@ fn paint_editor(
     cx: &mut App,
 ) {
     let c = frame.colors;
-    let Some(area) = range_rect(Range::single(editor.pos), columns, rows, origin, frame.zoom)
-    else {
+    let Some(area) = range_rect(Range::single(editor.pos), columns, rows, origin) else {
         return;
     };
     let font_size = px(BASE_FONT_SIZE * frame.zoom);
@@ -1004,8 +1002,8 @@ mod tests {
                 CellPos::new(row(last), ColIdx::default()),
             )
         };
-        assert!(range_rect(corner(2, 1_000_000), &columns, &rows, origin, 1.0).is_none());
-        assert!(range_rect(corner(1, 1_000_001), &columns, &rows, origin, 1.0).is_some());
+        assert!(range_rect(corner(2, 1_000_000), &columns, &rows, origin).is_none());
+        assert!(range_rect(corner(1, 1_000_001), &columns, &rows, origin).is_some());
     }
 
     #[test]
@@ -1024,7 +1022,7 @@ mod tests {
             CellPos::new(RowIdx::default(), ColIdx::clamped(1)),
             CellPos::new(RowIdx::LAST, ColIdx::clamped(1)),
         );
-        let area = range_rect(whole_column, &columns, &rows, origin, 1.0).unwrap();
+        let area = range_rect(whole_column, &columns, &rows, origin).unwrap();
         assert_eq!(f32::from(area.origin.x), 104.0);
         assert_eq!(f32::from(area.size.width), 64.0);
         assert!(f32::from(area.origin.y + area.size.height) <= 64.0 + 2.0);
@@ -1032,7 +1030,7 @@ mod tests {
             CellPos::new(row(6), ColIdx::default()),
             CellPos::new(row(6), ColIdx::LAST),
         );
-        let area = range_rect(whole_row, &columns, &rows, origin, 1.0).unwrap();
+        let area = range_rect(whole_row, &columns, &rows, origin).unwrap();
         assert_eq!(f32::from(area.origin.y), 44.0);
         assert!(f32::from(area.origin.x + area.size.width) <= 168.0 + 2.0);
     }
