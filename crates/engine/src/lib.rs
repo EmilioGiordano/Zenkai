@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod carried_moves;
+mod column_units;
 #[cfg(test)]
 mod content_cells_property;
 mod edit_profile;

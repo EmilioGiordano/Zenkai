@@ -352,6 +352,7 @@ impl Workspace {
         self.clipboard_source = None;
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         self.format_dialog = None;
+        self.size_dialog = None;
         self.chart = None;
         self.rename = None;
         self.go_to = None;

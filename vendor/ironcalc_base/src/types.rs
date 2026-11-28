@@ -201,6 +201,18 @@ pub struct Worksheet {
     /// Whether or not to show the row numbers and column letters of the worksheet
     pub show_row_col_headers: bool,
     pub conditional_formatting: Vec<ConditionalFormatting>,
+    /// The sizes rows and columns take when they have no entry of their own.
+    pub default_sizes: DefaultSizes,
+}
+
+/// What `sheetFormatPr` sets for the rows and columns of a sheet that have no entry.
+/// `None` leaves the size to the file or the application.
+#[derive(Encode, Decode, Debug, PartialEq, Clone, Copy, Default)]
+pub struct DefaultSizes {
+    /// Row height in points.
+    pub row_height: Option<f64>,
+    /// Column width in the unit of [Col::width].
+    pub column_width: Option<f64>,
 }
 
 // ECMA-376-1:2016 section 18.3.1.73

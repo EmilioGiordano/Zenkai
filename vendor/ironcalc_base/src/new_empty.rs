@@ -81,6 +81,7 @@ impl<'a> Model<'a> {
             show_row_col_headers: true,
             views,
             conditional_formatting: vec![],
+            default_sizes: Default::default(),
         }
     }
 

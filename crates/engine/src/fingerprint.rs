@@ -356,6 +356,8 @@ pub(crate) fn sheet_print(
         show_grid_lines,
         show_row_col_headers,
         conditional_formatting,
+        // Part of the settings the sheet writes, which `Carried::written` merges in.
+        default_sizes: _,
     } = sheet;
     let formulas = formula_hashes(formulas)?;
     let (shares, ()) = over_rows(

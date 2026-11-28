@@ -169,6 +169,51 @@ pub(crate) fn for_each_within(
     }
 }
 
+// The first `limit` cells holding contents inside `area`, row by row. Only the rows of the
+// area are looked at, and the walk stops at the limit.
+pub(crate) fn content_cells_up_to(
+    sheet_data: &CellStore,
+    area: Range,
+    limit: usize,
+) -> Vec<CellPos> {
+    let (first_row, last_row) = (row_i32(area.start.row), row_i32(area.end.row));
+    let cols = col_i32(area.start.col)..=col_i32(area.end.col);
+    let mut rows: Vec<i32> =
+        if usize::try_from(area.rows()).is_ok_and(|rows| rows < sheet_data.row_count()) {
+            (first_row..=last_row).collect()
+        } else {
+            sheet_data
+                .rows()
+                .filter(|row| (first_row..=last_row).contains(row))
+                .collect()
+        };
+    rows.sort_unstable();
+    let mut cells = Vec::new();
+    for row in rows {
+        let mut in_row: Vec<(i32, &Cell)> = if usize::from(area.cols()) < sheet_data.row_len(row) {
+            cols.clone()
+                .filter_map(|col| sheet_data.get(row, col).map(|cell| (col, cell)))
+                .collect()
+        } else {
+            sheet_data
+                .row_cells(row)
+                .filter(|(col, _)| cols.contains(col))
+                .collect()
+        };
+        in_row.sort_unstable_by_key(|(col, _)| *col);
+        for (col, cell) in in_row {
+            if matches!(cell, Cell::EmptyCell { .. }) {
+                continue;
+            }
+            if cells.len() >= limit {
+                return cells;
+            }
+            cells.push(position(row, col));
+        }
+    }
+    cells
+}
+
 // Cells holding contents (not just a style) inside `area`, in no particular order.
 pub(crate) fn content_cells_within(sheet_data: &CellStore, area: Range) -> Vec<CellPos> {
     let mut cells = Vec::new();

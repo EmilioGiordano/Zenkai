@@ -119,6 +119,9 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-1", FormatCells, CONTEXT),
         bind("enter", ApplyNumberFormat, Some("FormatDialog")),
         bind("escape", CloseFormatDialog, Some("FormatDialog")),
+        bind("escape", CloseLineSizeDialog, Some("LineSizeDialog")),
+        bind("tab", FocusNextControl, Some("LineSizeDialog")),
+        bind("shift-tab", FocusPreviousControl, Some("LineSizeDialog")),
         bind(
             "enter",
             ConfirmCloseDialog,

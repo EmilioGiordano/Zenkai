@@ -9,7 +9,7 @@ use crate::{
 };
 
 use crate::user_model::common::selected_sheet_after_move;
-use crate::user_model::history::{Diff, DiffList};
+use crate::user_model::history::{Diff, DiffList, RowChange};
 
 impl<'a> UserModel<'a> {
     pub(super) fn apply_undo_diff_list(&mut self, diff_list: &DiffList) -> Result<(), String> {
@@ -385,6 +385,31 @@ impl<'a> UserModel<'a> {
                 } => {
                     self.model.set_show_grid_lines(*sheet, *old_value)?;
                 }
+                Diff::SetDefaultSizes {
+                    sheet,
+                    old_value,
+                    new_value: _,
+                } => {
+                    self.model.set_default_sizes(*sheet, *old_value)?;
+                }
+                Diff::SetRowEntries { sheet, changes } => {
+                    needs_evaluation |= changes.iter().any(RowChange::changes_visibility);
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .apply_row_changes(changes, true);
+                }
+                Diff::SetColumnEntries {
+                    sheet,
+                    first,
+                    last,
+                    old,
+                    new: _,
+                } => self
+                    .model
+                    .workbook
+                    .worksheet_mut(*sheet)?
+                    .replace_cols_within(*first, *last, old),
                 Diff::SetShowRowColHeaders {
                     sheet,
                     old_value,
@@ -466,6 +491,7 @@ impl<'a> UserModel<'a> {
                     worksheet.rows = old_data.rows.clone();
                     worksheet.cols = old_data.cols.clone();
                     worksheet.show_grid_lines = old_data.show_grid_lines;
+                    worksheet.default_sizes = old_data.default_sizes;
                     worksheet.show_row_col_headers = old_data.show_row_col_headers;
                     worksheet.frozen_columns = old_data.frozen_columns;
                     worksheet.frozen_rows = old_data.frozen_rows;
@@ -936,6 +962,31 @@ impl<'a> UserModel<'a> {
                 } => {
                     self.model.set_show_grid_lines(*sheet, *new_value)?;
                 }
+                Diff::SetDefaultSizes {
+                    sheet,
+                    old_value: _,
+                    new_value,
+                } => {
+                    self.model.set_default_sizes(*sheet, *new_value)?;
+                }
+                Diff::SetRowEntries { sheet, changes } => {
+                    needs_evaluation |= changes.iter().any(RowChange::changes_visibility);
+                    self.model
+                        .workbook
+                        .worksheet_mut(*sheet)?
+                        .apply_row_changes(changes, false);
+                }
+                Diff::SetColumnEntries {
+                    sheet,
+                    first,
+                    last,
+                    old: _,
+                    new,
+                } => self
+                    .model
+                    .workbook
+                    .worksheet_mut(*sheet)?
+                    .replace_cols_within(*first, *last, new),
                 Diff::SetShowRowColHeaders {
                     sheet,
                     old_value: _,

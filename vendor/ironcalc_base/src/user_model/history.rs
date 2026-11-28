@@ -5,7 +5,9 @@ use bitcode::{Decode, Encode};
 use crate::{
     cf_types::CfRule,
     expressions::types::Area,
-    types::{Cell, Col, Color, Row, SheetState, Style, StyleIncludes, Theme, Worksheet},
+    types::{
+        Cell, Col, Color, DefaultSizes, Row, SheetState, Style, StyleIncludes, Theme, Worksheet,
+    },
 };
 
 #[derive(Clone, Encode, Decode)]
@@ -18,6 +20,22 @@ pub(crate) struct RowData {
 pub(crate) struct ColumnData {
     pub(crate) column: Option<Col>,
     pub(crate) data: HashMap<i32, Cell>,
+}
+
+// A row's entry before and after an edit that changes many rows; `None` is no entry.
+#[derive(Clone, Encode, Decode)]
+pub(crate) struct RowChange {
+    pub(crate) row: i32,
+    pub(crate) old: Option<Row>,
+    pub(crate) new: Option<Row>,
+}
+
+impl RowChange {
+    // Hiding or showing a row changes what SUBTOTAL reads.
+    pub(crate) fn changes_visibility(&self) -> bool {
+        let hidden = |row: &Option<Row>| row.as_ref().is_some_and(|row| row.hidden);
+        hidden(&self.old) != hidden(&self.new)
+    }
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -210,6 +228,25 @@ pub(crate) enum Diff {
         sheet: u32,
         old_value: bool,
         new_value: bool,
+    },
+    SetDefaultSizes {
+        sheet: u32,
+        old_value: DefaultSizes,
+        new_value: DefaultSizes,
+    },
+    // Many rows given a height or hidden at once.
+    SetRowEntries {
+        sheet: u32,
+        changes: Vec<RowChange>,
+    },
+    // What the entries of columns `first` to `last` were and are after many columns are
+    // given a width at once.
+    SetColumnEntries {
+        sheet: u32,
+        first: i32,
+        last: i32,
+        old: Vec<Col>,
+        new: Vec<Col>,
     },
     SetShowRowColHeaders {
         sheet: u32,
@@ -461,6 +498,9 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
             | Diff::SetFrozenRowsCount { .. }
             | Diff::SetFrozenColumnsCount { .. }
             | Diff::SetShowGridLines { .. }
+            | Diff::SetDefaultSizes { .. }
+            | Diff::SetRowEntries { .. }
+            | Diff::SetColumnEntries { .. }
             | Diff::SetShowRowColHeaders { .. }
             | Diff::AddConditionalFormatting { .. }
             | Diff::DeleteConditionalFormatting { .. }

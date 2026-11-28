@@ -232,8 +232,8 @@ fn hiding_and_showing_an_outlined_default_width_column_keeps_its_outline() {
         book.set_columns_hidden(SheetId(0), column, false).unwrap();
         let saved = book.to_xlsx().unwrap();
         let sheet = sheet_xml(saved.clone());
-        // The sheet's default width, not IronCalc's 10 characters (75 px).
-        let written = format!(r#"<col min="3" max="3" width="8.43" {outlined}"#);
+        // The sheet's default width, 64 px, not IronCalc's own default (70 px as stored).
+        let written = format!(r#"<col min="3" max="3" width="9.140625" {outlined}"#);
         assert!(sheet.contains(&written), "{reader:?} {sheet}");
         let again = dir.path().join("saved.xlsx");
         std::fs::write(&again, saved).unwrap();

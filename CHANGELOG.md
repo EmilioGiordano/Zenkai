@@ -20,6 +20,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   off opens without them, and the View commands Gridlines, Formula Bar and Headings in the
   command palette turn them on and off, saved back to the file (Formula Bar is remembered by
   the app, never in a file) ([#335](https://github.com/EmilioGiordano/Zenkai/issues/335)).
+- Row Height… and Column Width… set an exact size for the selected rows or columns, in
+  Excel's units (points and characters), as one undo step; zero hides them, and a selection
+  of every row or column sets the size of the sheet. AutoFit row height and AutoFit column
+  width fit each selected line to its content, from the palette, the row and column header
+  menus (which also gain Hide and Unhide) and, for a row, a double click on the bottom
+  edge of its header
+  ([#338](https://github.com/EmilioGiordano/Zenkai/issues/338)).
+- A sheet's default row height and column width are read from the file, drawn and written
+  back, so a file that sets them keeps them.
+- Column widths follow Excel's own model: a file's `<col width>` draws at Excel's pixels (a
+  column Excel shows as 20 characters is 145 px, not 150) and a width set here is saved as
+  Excel stores it (`20.7109375`).
 
 ### Safety
 

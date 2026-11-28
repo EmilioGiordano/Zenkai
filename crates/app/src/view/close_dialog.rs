@@ -10,6 +10,7 @@ use crate::actions::{
     FocusPreviousControl,
 };
 use crate::close_prompt::{Choices, CloseGoal, ClosePlan, Departure, Purpose};
+use crate::dialog_focus;
 use crate::document::Document;
 use crate::interface_scale::rem_px;
 
@@ -183,28 +184,11 @@ impl Workspace {
         self.close_called_off(cx);
     }
 
-    // Tab wraps around inside the dialog; focus never lands on the window behind it.
     fn cycle_close_focus(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.close_dialog.as_ref() else {
             return;
         };
-        let focus = dialog.focus.clone();
-        let stops = dialog.tab_stops();
-        if forward {
-            window.focus_next(cx);
-            if !focus.contains_focused(window, cx) {
-                window.focus(&focus, cx);
-                window.focus_next(cx);
-            }
-        } else {
-            window.focus_prev(cx);
-            if !focus.contains_focused(window, cx) {
-                window.focus(&focus, cx);
-                for _ in 0..stops {
-                    window.focus_next(cx);
-                }
-            }
-        }
+        dialog_focus::cycle(&dialog.focus, dialog.tab_stops(), forward, window, cx);
     }
 
     pub(super) fn render_close_dialog(&self, cx: &Context<Self>) -> Option<impl IntoElement> {

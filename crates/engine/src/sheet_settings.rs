@@ -5,12 +5,15 @@
 // output declares only the main and relationship namespaces. The elements written back
 // only into the file they were read from are `sheet_elements`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 
+use ironcalc::base::types::DefaultSizes;
 use roxmltree::Node;
 
 use crate::carried_moves::{LostKind, MoveTaken, Moves, Restored, Taken};
+use crate::column_units;
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::saved::Remains;
@@ -69,7 +72,10 @@ const SHEET_VIEW: &[(&str, Value)] = &[
 ];
 const SHEET_FORMAT: &[(&str, Value)] = &[
     ("baseColWidth", Value::Int(0, 255)),
-    ("defaultColWidth", Value::Real(0.0, 255.0)),
+    (
+        "defaultColWidth",
+        Value::Real(0.0, column_units::MAX_STORED_WIDTH),
+    ),
     ("defaultRowHeight", Value::Real(0.0, 409.5)),
     ("customHeight", Value::Bool),
     ("zeroHeight", Value::Bool),
@@ -234,8 +240,8 @@ impl SheetSettings {
         *self == SheetSettings::default()
     }
 
-    // The width Excel gives a column with no <col>: defaultColWidth, else baseColWidth
-    // (8) plus the 3/7 character Excel adds for padding, which is its 8.43.
+    // The width, as stored, that Excel gives a column with no <col>: defaultColWidth, else
+    // what baseColWidth (8 characters unless the file says) comes to, 9.140625 for 8.
     pub fn default_column_width(&self) -> String {
         if let Some(width) = self.format_attribute("defaultColWidth") {
             return width.to_string();
@@ -244,13 +250,61 @@ impl SheetSettings {
             .format_attribute("baseColWidth")
             .and_then(|base| base.parse().ok())
             .unwrap_or(8.0);
-        format!("{:.2}", base + 3.0 / 7.0)
+        column_units::default_stored_width(base).to_string()
     }
 
     fn format_attribute(&self, name: &str) -> Option<&str> {
         let format = self.format.as_deref()?;
         let (_, rest) = format.split_once(&format!(" {name}=\""))?;
         rest.split_once('"').map(|(value, _)| value)
+    }
+
+    // Points; only a height the file marks as set by hand counts, as Excel's own default
+    // follows the font.
+    pub(crate) fn file_row_height(&self) -> Option<f64> {
+        (self.format_attribute("customHeight") == Some("1"))
+            .then(|| self.format_number("defaultRowHeight"))
+            .flatten()
+    }
+
+    // The width as stored: defaultColWidth, else what baseColWidth comes to.
+    pub(crate) fn file_column_width(&self) -> Option<f64> {
+        self.format_number("defaultColWidth").or_else(|| {
+            self.format_number("baseColWidth")
+                .map(column_units::default_stored_width)
+        })
+    }
+
+    fn format_number(&self, name: &str) -> Option<f64> {
+        let number: f64 = self.format_attribute(name)?.parse().ok()?;
+        (number.is_finite() && number > 0.0).then_some(number)
+    }
+
+    // The sizes set in the model win over the ones the file carried, and a row height
+    // set by hand is marked as such.
+    fn with_default_sizes(mut self, sizes: DefaultSizes) -> SheetSettings {
+        if sizes == DefaultSizes::default() {
+            return self;
+        }
+        let written = |name: &str, set: Option<f64>| match set {
+            Some(value) => Some(value.to_string()),
+            None => self.format_attribute(name).map(str::to_string),
+        };
+        let custom_height = sizes
+            .row_height
+            .map(|_| "1".to_string())
+            .or_else(|| self.format_attribute("customHeight").map(str::to_string));
+        let values = SHEET_FORMAT.iter().filter_map(|(name, _)| {
+            let value = match *name {
+                "defaultColWidth" => written(name, sizes.column_width),
+                "defaultRowHeight" => written(name, sizes.row_height),
+                "customHeight" => custom_height.clone(),
+                _ => self.format_attribute(name).map(str::to_string),
+            }?;
+            Some(format!(" {name}=\"{value}\""))
+        });
+        self.format = Some(values.collect());
+        self
     }
 
     pub fn format_element(&self) -> String {
@@ -353,13 +407,23 @@ impl Carried {
         self.sheets.get(&sheet_id)
     }
 
-    // What a save writes for the sheet; empty settings write nothing.
+    // What a save writes for the sheet; empty settings write nothing. The sizes the sheet
+    // sets in the model are part of it.
     pub(crate) fn written(
         &self,
         sheet: &ironcalc::base::types::Worksheet,
-    ) -> Option<&SheetSettings> {
-        self.get(sheet.sheet_id)
-            .filter(|settings| !settings.is_empty())
+    ) -> Option<Cow<'_, SheetSettings>> {
+        let sizes = sheet.default_sizes;
+        let settings = match self.get(sheet.sheet_id) {
+            Some(settings) if sizes == DefaultSizes::default() => Cow::Borrowed(settings),
+            carried => Cow::Owned(
+                carried
+                    .cloned()
+                    .unwrap_or_default()
+                    .with_default_sizes(sizes),
+            ),
+        };
+        (!settings.is_empty()).then_some(settings)
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {
@@ -945,9 +1009,9 @@ mod tests {
             }
             .default_column_width()
         };
-        assert_eq!(width(None), "8.43");
-        assert_eq!(width(Some(r#" baseColWidth="8""#)), "8.43");
-        assert_eq!(width(Some(r#" baseColWidth="10""#)), "10.43");
+        assert_eq!(width(None), "9.140625");
+        assert_eq!(width(Some(r#" baseColWidth="8""#)), "9.140625");
+        assert_eq!(width(Some(r#" baseColWidth="10""#)), "11.42578125");
         assert_eq!(
             width(Some(r#" baseColWidth="10" defaultColWidth="12.5""#)),
             "12.5"
@@ -1137,5 +1201,114 @@ mod tests {
         assert_eq!(attribute(tag, "r"), Some("4"));
         assert_eq!(attribute(tag, "customHeight"), Some("1"));
         assert_eq!(attribute(tag, "Height"), None);
+    }
+
+    fn with_format(format: &str) -> SheetSettings {
+        SheetSettings {
+            format: Some(format.to_string()),
+            ..SheetSettings::default()
+        }
+    }
+
+    const SET_BY_HAND: DefaultSizes = DefaultSizes {
+        row_height: Some(22.5),
+        column_width: Some(20.0),
+    };
+
+    #[test]
+    fn the_sizes_of_the_model_replace_the_attributes_of_the_file_and_keep_the_others() {
+        let file = with_format(r#" baseColWidth="8" defaultRowHeight="15" thickTop="1""#);
+        let sized = file.with_default_sizes(SET_BY_HAND);
+        assert_eq!(
+            sized.format.as_deref(),
+            Some(
+                r#" baseColWidth="8" defaultColWidth="20" defaultRowHeight="22.5" customHeight="1" thickTop="1""#
+            )
+        );
+        assert_eq!(sized.file_row_height(), Some(22.5));
+        assert_eq!(sized.file_column_width(), Some(20.0));
+    }
+
+    #[test]
+    fn a_sheet_that_carried_no_format_gets_one_with_the_sizes() {
+        let sized = SheetSettings::default().with_default_sizes(DefaultSizes {
+            row_height: None,
+            column_width: Some(12.5),
+        });
+        assert_eq!(sized.format.as_deref(), Some(r#" defaultColWidth="12.5""#));
+        assert!(sized.format_element().contains(r#" defaultRowHeight="15""#));
+        assert_eq!(sized.file_row_height(), None);
+    }
+
+    #[test]
+    fn without_sizes_in_the_model_the_settings_are_as_the_file_had_them() {
+        let file = with_format(r#" defaultRowHeight="18" customHeight="1""#);
+        assert_eq!(
+            file.clone().with_default_sizes(DefaultSizes::default()),
+            file
+        );
+        assert_eq!(file.file_row_height(), Some(18.0));
+    }
+
+    #[test]
+    fn the_widest_default_column_survives_a_read() {
+        let part = sheet(
+            r#"<sheetFormatPr defaultColWidth="255.7109375" defaultRowHeight="15"/><sheetData/>"#,
+        );
+        let settings = read(&part, &mut ElementBudget::workbook());
+        assert_eq!(settings.file_column_width(), Some(255.710_937_5));
+        let past =
+            sheet(r#"<sheetFormatPr defaultColWidth="255.72" defaultRowHeight="15"/><sheetData/>"#);
+        assert_eq!(
+            read(&past, &mut ElementBudget::workbook()).file_column_width(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_base_column_width_alone_sets_the_default_column() {
+        assert_eq!(
+            with_format(r#" baseColWidth="10""#).file_column_width(),
+            Some(11.425_781_25)
+        );
+        assert_eq!(
+            with_format(r#" baseColWidth="8" defaultColWidth="20.7109375""#).file_column_width(),
+            Some(20.710_937_5)
+        );
+        assert_eq!(
+            with_format(r#" defaultRowHeight="15""#).file_column_width(),
+            None
+        );
+    }
+
+    #[test]
+    fn only_a_row_height_the_file_marks_as_custom_counts() {
+        assert_eq!(
+            with_format(r#" defaultRowHeight="18""#).file_row_height(),
+            None
+        );
+        assert_eq!(
+            with_format(r#" defaultRowHeight="18" customHeight="0""#).file_row_height(),
+            None
+        );
+        assert_eq!(
+            with_format(r#" defaultRowHeight="0" customHeight="1""#).file_row_height(),
+            None
+        );
+        assert_eq!(
+            with_format(r#" defaultColWidth="0""#).file_column_width(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_settings_a_sheet_writes_include_the_sizes_of_the_model() {
+        let mut model = ironcalc::base::Model::new_empty("b", "en", "UTC", "en").unwrap();
+        let carried = Carried::default();
+        assert!(carried.written(&model.workbook.worksheets[0]).is_none());
+        model.workbook.worksheets[0].default_sizes = SET_BY_HAND;
+        let written = carried.written(&model.workbook.worksheets[0]).unwrap();
+        assert_eq!(written.file_row_height(), Some(22.5));
+        assert_eq!(written.file_column_width(), Some(20.0));
     }
 }

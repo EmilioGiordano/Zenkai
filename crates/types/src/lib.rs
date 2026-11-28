@@ -448,10 +448,21 @@ pub struct ColumnSpan {
     pub width: f32,
 }
 
+// What a row or column measures and whether it has a size of its own, as opposed to
+// taking the sheet's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineSize {
+    pub pixels: f32,
+    pub own: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct SheetSizes {
     pub columns: Vec<ColumnSpan>,
     pub rows: Vec<(RowIdx, f32)>,
+    // What a column or row with no entry measures, when the sheet sets it.
+    pub default_column_width: Option<f32>,
+    pub default_row_height: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

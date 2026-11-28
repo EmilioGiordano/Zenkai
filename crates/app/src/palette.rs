@@ -217,6 +217,10 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.format_percent"), FormatPercent),
                 item(t!("palette.format_date"), FormatDate),
                 item(t!("palette.format_cells"), FormatCells),
+                item(t!("palette.row_height"), RowHeight),
+                item(t!("palette.column_width"), ColumnWidth),
+                item(t!("palette.autofit_row_height"), AutoFitRowHeight),
+                item(t!("palette.autofit_column_width"), AutoFitColumnWidth),
                 item(t!("palette.increase_decimal"), IncreaseDecimal),
                 item(t!("palette.decrease_decimal"), DecreaseDecimal),
             ],
@@ -492,5 +496,45 @@ mod tests {
         assert!(found(Toggle::Headings, "row numbers"));
         assert!(found(Toggle::FormulaBar, "hide formula bar"));
         assert!(found(Toggle::FormulaBar, "name box"));
+    }
+
+    #[test]
+    fn the_format_group_ends_the_cell_formats_with_the_line_size_commands_in_order() {
+        let groups = table();
+        let format = groups.iter().find(|group| group.label == "Format").unwrap();
+        let entries: Vec<(&str, &str)> = format
+            .entries
+            .iter()
+            .map(|entry| (entry.label, entry.action.name()))
+            .collect();
+        let at = entries
+            .iter()
+            .position(|(_, name)| *name == "zenkai::FormatCells")
+            .unwrap();
+        assert_eq!(
+            entries[at + 1..at + 5],
+            [
+                ("Row height…", "zenkai::RowHeight"),
+                ("Column width…", "zenkai::ColumnWidth"),
+                ("AutoFit row height", "zenkai::AutoFitRowHeight"),
+                ("AutoFit column width", "zenkai::AutoFitColumnWidth"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_line_size_commands_have_no_default_shortcut() {
+        let names = [
+            "zenkai::RowHeight",
+            "zenkai::ColumnWidth",
+            "zenkai::AutoFitRowHeight",
+            "zenkai::AutoFitColumnWidth",
+        ];
+        let model = crate::keymap::Model::build();
+        for name in names {
+            let command = model.command(name).unwrap();
+            assert!(model.default_keys(command).is_empty(), "{name}");
+            assert!(command.home().is_some(), "{name} can be bound in Settings");
+        }
     }
 }
