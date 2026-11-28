@@ -549,4 +549,22 @@ mod tests {
         assert_eq!(inserted.current_end(2), 4);
         assert_eq!(inserted.current_end(0), 0);
     }
+
+    #[test]
+    fn a_column_of_the_sheet_is_mapped_to_the_column_of_the_file_it_came_from() {
+        let column = |index: u16| ColIdx::new(index).unwrap();
+        let walk = Walk::new(
+            [
+                lines(1, LineAxis::Column, LineChange::Delete, 0, 1),
+                lines(1, LineAxis::Column, LineChange::Insert, 2, 2),
+                lines(1, LineAxis::Row, LineChange::Insert, 0, 1),
+            ],
+            1,
+        );
+        assert_eq!(walk.file_column(column(0)), Some(column(1)));
+        assert_eq!(walk.file_column(column(1)), Some(column(2)));
+        assert_eq!(walk.file_column(column(2)), None);
+        assert_eq!(walk.file_column(column(3)), None);
+        assert_eq!(walk.file_column(column(4)), Some(column(3)));
+    }
 }
