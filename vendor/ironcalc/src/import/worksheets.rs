@@ -28,7 +28,7 @@ use super::{
     conditional_formatting::load_conditional_formatting,
     shared_strings::{decode_xlsx_escapes, is_phonetic_run_text},
     tables::load_table,
-    util::{get_attribute, get_bool_false, get_color, get_number},
+    util::{get_attribute, get_bool, get_bool_false, get_color, get_number},
 };
 
 pub(crate) struct Sheet {
@@ -660,11 +660,6 @@ impl Default for SheetView {
     }
 }
 
-// An absent attribute means shown; the schema's boolean also spells off as "false".
-fn shown(sheet_view: Node, attribute: &str) -> bool {
-    !matches!(sheet_view.attribute(attribute), Some("0" | "false"))
-}
-
 fn get_sheet_view(ws: Node) -> SheetView {
     // <sheetViews>
     //   <sheetView workbookViewId="0">
@@ -691,7 +686,7 @@ fn get_sheet_view(ws: Node) -> SheetView {
     let mut frozen_rows = 0;
     let mut frozen_columns = 0;
 
-    // In IronCalc there can only be one sheetView
+    // IronCalc keeps one view per sheet: the one of the first workbook window
     let sheet_views = ws
         .children()
         .filter(|n| n.has_tag_name("sheetViews"))
@@ -702,20 +697,23 @@ fn get_sheet_view(ws: Node) -> SheetView {
         return SheetView::default();
     }
 
-    let sheet_view = sheet_views[0]
+    // A workbook saved with several windows has a sheetView for each; the one of the first
+    // window (workbookViewId 0), else the first, is the one that is read.
+    let views = sheet_views[0]
         .children()
         .filter(|n| n.has_tag_name("sheetView"))
         .collect::<Vec<Node>>();
-
-    // We are only expecting one `sheetView` element. Otherwise return a default
-    if sheet_view.len() != 1 {
+    let Some(sheet_view) = views
+        .iter()
+        .find(|n| n.attribute("workbookViewId").map(str::trim) == Some("0"))
+        .or(views.first())
+        .copied()
+    else {
         return SheetView::default();
-    }
-
-    let sheet_view = sheet_view[0];
+    };
     let is_selected = sheet_view.attribute("tabSelected").unwrap_or("0") == "1";
-    let show_grid_lines = shown(sheet_view, "showGridLines");
-    let show_row_col_headers = shown(sheet_view, "showRowColHeaders");
+    let show_grid_lines = get_bool(sheet_view, "showGridLines");
+    let show_row_col_headers = get_bool(sheet_view, "showRowColHeaders");
 
     let pane = sheet_view
         .children()
