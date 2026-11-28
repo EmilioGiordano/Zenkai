@@ -29,6 +29,7 @@ pub(crate) fn copied_sheet(
         views,
         show_grid_lines,
         conditional_formatting,
+        default_sizes,
     } = sheet;
     let copy_rows = |sheet_data: &CellStore, rows: &[i32]| {
         rows.iter()
@@ -66,6 +67,7 @@ pub(crate) fn copied_sheet(
         views: views.clone(),
         show_grid_lines: *show_grid_lines,
         conditional_formatting: conditional_formatting.clone(),
+        default_sizes: *default_sizes,
     };
     Ok((copied, formulas))
 }

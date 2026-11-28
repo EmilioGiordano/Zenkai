@@ -166,6 +166,7 @@ pub fn layout_hiding(rows: &[u32], cols: &[u16]) -> Layout {
             .iter()
             .map(|row| (RowIdx::clamped(i64::from(*row)), 0.0))
             .collect(),
+        ..SheetSizes::default()
     })
 }
 

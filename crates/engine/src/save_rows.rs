@@ -220,6 +220,7 @@ pub(crate) fn row_job(
         views: HashMap::new(),
         show_grid_lines: sheet.show_grid_lines,
         conditional_formatting: Vec::new(),
+        default_sizes: sheet.default_sizes,
     };
     for span in &spans {
         for row in span_rows(span) {

@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use ironcalc::base::expressions::types::{Area, CellReferenceIndex};
 use ironcalc::base::types::{
-    Cell, CellType, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
+    Cell, CellType, Color, DefaultSizes, FormulaValue, HorizontalAlignment, SpillValue, Style,
+    VerticalAlignment,
 };
 use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
@@ -154,6 +155,10 @@ pub trait Engine: Send {
         row: RowIdx,
         pixels: f32,
     ) -> Result<(), EngineError>;
+    // The size of every column or row of the sheet that has no entry of its own, as Excel
+    // sets it for a whole-sheet selection. The pixels must be above zero.
+    fn set_default_column_width(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError>;
+    fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError>;
     fn frozen(&self, sheet: SheetId) -> (u32, u16);
     fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError>;
     fn insert_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError>;
@@ -291,7 +296,39 @@ fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
 }
 
+fn column_pixels(characters: f64) -> f32 {
+    (characters * PIXELS_PER_CHAR + CHAR_WIDTH_PADDING).round() as f32
+}
+
+fn row_pixels(points: f64) -> f32 {
+    (points * PIXELS_PER_POINT).round() as f32
+}
+
+// A default of zero would hide every line, which a sheet default never does.
+fn visible_pixels(pixels: f32) -> Result<f64, EngineError> {
+    if pixels.is_finite() && pixels > 0.0 {
+        Ok(f64::from(pixels))
+    } else {
+        Err(rejected(format!("{pixels} is not a size a line can have")))
+    }
+}
+
 impl Workbook {
+    fn change_default_sizes(
+        &mut self,
+        sheet: SheetId,
+        change: impl FnOnce(&mut DefaultSizes),
+    ) -> Result<(), EngineError> {
+        self.model
+            .edit_keeping_cells(|model| {
+                let mut sizes = model.get_default_sizes(sheet.0)?;
+                change(&mut sizes);
+                model.set_default_sizes(sheet.0, sizes)
+            })
+            .map_err(rejected)
+            .inspect(|()| self.model.count_style_edit())
+    }
+
     // The sheet is looked up once so a scan over thousands of cells only pays the cell
     // lookups.
     fn cell_lookup<'a>(
@@ -1760,7 +1797,7 @@ impl Engine for Workbook {
                 width: if c.hidden {
                     0.0
                 } else {
-                    (c.width * PIXELS_PER_CHAR + CHAR_WIDTH_PADDING).round() as f32
+                    column_pixels(c.width)
                 },
             })
             .collect();
@@ -1769,15 +1806,27 @@ impl Engine for Workbook {
             .iter()
             .filter(|r| r.custom_height || r.hidden)
             .map(|r| {
-                let height = if r.hidden {
-                    0.0
-                } else {
-                    (r.height * PIXELS_PER_POINT).round() as f32
-                };
+                let height = if r.hidden { 0.0 } else { row_pixels(r.height) };
                 (RowIdx::clamped(i64::from(r.r) - 1), height)
             })
             .collect();
-        SheetSizes { columns, rows }
+        let settings = self.carried.get(ws.sheet_id);
+        let default_column_width = ws
+            .default_sizes
+            .column_width
+            .or_else(|| settings.and_then(SheetSettings::file_column_width))
+            .map(column_pixels);
+        let default_row_height = ws
+            .default_sizes
+            .row_height
+            .or_else(|| settings.and_then(SheetSettings::file_row_height))
+            .map(row_pixels);
+        SheetSizes {
+            columns,
+            rows,
+            default_column_width,
+            default_row_height,
+        }
     }
 
     fn set_column_width(
@@ -1821,6 +1870,17 @@ impl Engine for Workbook {
             .edit_keeping_cells(|model| model.set_rows_height(sheet.0, row, row, height))
             .map_err(rejected)
             .inspect(|()| self.model.count_style_edit())
+    }
+
+    fn set_default_column_width(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
+        let characters =
+            ((visible_pixels(pixels)? - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).clamp(0.0, 255.0);
+        self.change_default_sizes(sheet, |sizes| sizes.column_width = Some(characters))
+    }
+
+    fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
+        let points = (visible_pixels(pixels)? / PIXELS_PER_POINT).clamp(0.0, 409.5);
+        self.change_default_sizes(sheet, |sizes| sizes.row_height = Some(points))
     }
 
     fn frozen(&self, sheet: SheetId) -> (u32, u16) {

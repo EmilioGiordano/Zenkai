@@ -5,9 +5,11 @@
 // output declares only the main and relationship namespaces. The elements written back
 // only into the file they were read from are `sheet_elements`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 
+use ironcalc::base::types::DefaultSizes;
 use roxmltree::Node;
 
 use crate::carried_moves::{LostKind, MoveTaken, Moves, Restored, Taken};
@@ -254,6 +256,50 @@ impl SheetSettings {
         rest.split_once('"').map(|(value, _)| value)
     }
 
+    // Points; only a height the file marks as set by hand counts, as Excel's own default
+    // follows the font.
+    pub(crate) fn file_row_height(&self) -> Option<f64> {
+        (self.format_attribute("customHeight") == Some("1"))
+            .then(|| self.format_number("defaultRowHeight"))
+            .flatten()
+    }
+
+    pub(crate) fn file_column_width(&self) -> Option<f64> {
+        self.format_number("defaultColWidth")
+    }
+
+    fn format_number(&self, name: &str) -> Option<f64> {
+        let number: f64 = self.format_attribute(name)?.parse().ok()?;
+        (number.is_finite() && number > 0.0).then_some(number)
+    }
+
+    // The sizes set in the model win over the ones the file carried, and a row height
+    // set by hand is marked as such.
+    fn with_default_sizes(mut self, sizes: DefaultSizes) -> SheetSettings {
+        if sizes == DefaultSizes::default() {
+            return self;
+        }
+        let written = |name: &str, set: Option<f64>| match set {
+            Some(value) => Some(value.to_string()),
+            None => self.format_attribute(name).map(str::to_string),
+        };
+        let custom_height = sizes
+            .row_height
+            .map(|_| "1".to_string())
+            .or_else(|| self.format_attribute("customHeight").map(str::to_string));
+        let values = SHEET_FORMAT.iter().filter_map(|(name, _)| {
+            let value = match *name {
+                "defaultColWidth" => written(name, sizes.column_width),
+                "defaultRowHeight" => written(name, sizes.row_height),
+                "customHeight" => custom_height.clone(),
+                _ => self.format_attribute(name).map(str::to_string),
+            }?;
+            Some(format!(" {name}=\"{value}\""))
+        });
+        self.format = Some(values.collect());
+        self
+    }
+
     pub fn format_element(&self) -> String {
         let (rows, columns) = (self.rows.max_level(), self.columns.max_level());
         if self.format.is_none() && rows == 0 && columns == 0 {
@@ -354,13 +400,23 @@ impl Carried {
         self.sheets.get(&sheet_id)
     }
 
-    // What a save writes for the sheet; empty settings write nothing.
+    // What a save writes for the sheet; empty settings write nothing. The sizes the sheet
+    // sets in the model are part of it.
     pub(crate) fn written(
         &self,
         sheet: &ironcalc::base::types::Worksheet,
-    ) -> Option<&SheetSettings> {
-        self.get(sheet.sheet_id)
-            .filter(|settings| !settings.is_empty())
+    ) -> Option<Cow<'_, SheetSettings>> {
+        let sizes = sheet.default_sizes;
+        let settings = match self.get(sheet.sheet_id) {
+            Some(settings) if sizes == DefaultSizes::default() => Cow::Borrowed(settings),
+            carried => Cow::Owned(
+                carried
+                    .cloned()
+                    .unwrap_or_default()
+                    .with_default_sizes(sizes),
+            ),
+        };
+        (!settings.is_empty()).then_some(settings)
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {

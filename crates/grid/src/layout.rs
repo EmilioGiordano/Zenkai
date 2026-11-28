@@ -335,6 +335,7 @@ mod tests {
                 width: 100.0,
             }],
             rows: vec![(RowIdx::new(0).unwrap(), 40.0)],
+            ..SheetSizes::default()
         };
         let layout = Layout::from_sizes(&sizes);
         let left = ColIdx::new(0).unwrap();
