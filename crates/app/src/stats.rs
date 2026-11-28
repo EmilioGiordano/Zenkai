@@ -87,7 +87,13 @@ fn extreme(a: Option<f64>, b: Option<f64>, pick: fn(f64, f64) -> f64) -> Option<
     }
 }
 
-pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<SelectionStats> {
+// `skipped` are the runs of rows an AutoFilter hides, which the totals leave out as in Excel.
+pub fn compute(
+    workbook: &Workbook,
+    sheet: SheetId,
+    selection: Range,
+    skipped: &[(RowIdx, RowIdx)],
+) -> Option<SelectionStats> {
     let end = workbook.used_end(sheet);
     let Some(clipped) = selection.clip_to(end) else {
         return Some(SelectionStats::default());
@@ -102,7 +108,7 @@ pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<
         thread::available_parallelism().map_or(1, NonZero::get) as u32
     };
     if workers == 1 {
-        return Some(tally(clipped, &contents));
+        return Some(tally(clipped, &contents, skipped));
     }
     let band_rows = clipped.rows().div_ceil(workers);
     let bands: Vec<Range> = (0..workers)
@@ -120,7 +126,7 @@ pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<
     let totals = thread::scope(|scope| {
         let handles: Vec<_> = bands
             .iter()
-            .map(|band| scope.spawn(|| tally(*band, &contents)))
+            .map(|band| scope.spawn(|| tally(*band, &contents, skipped)))
             .collect();
         handles
             .into_iter()
@@ -134,9 +140,18 @@ pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<
     Some(totals)
 }
 
-fn tally(band: Range, contents: &(impl Fn(CellPos) -> Contents + Sync)) -> SelectionStats {
+fn tally(
+    band: Range,
+    contents: &(impl Fn(CellPos) -> Contents + Sync),
+    skipped: &[(RowIdx, RowIdx)],
+) -> SelectionStats {
     let mut stats = SelectionStats::default();
-    for pos in band.positions() {
+    let hidden = |row: RowIdx| {
+        skipped
+            .iter()
+            .any(|(first, last)| (*first..=*last).contains(&row))
+    };
+    for pos in band.positions().filter(|pos| !hidden(pos.row)) {
         match contents(pos) {
             Contents::Empty => {}
             Contents::Number(n) => {
@@ -176,13 +191,19 @@ mod tests {
         workbook
             .set_inputs(SheetId(0), CellPos::default(), &rows)
             .unwrap();
-        let stats = compute(&workbook, SheetId(0), Range::parse_a1("A1:A10").unwrap()).unwrap();
+        let stats = compute(
+            &workbook,
+            SheetId(0),
+            Range::parse_a1("A1:A10").unwrap(),
+            &[],
+        )
+        .unwrap();
         assert_eq!((stats.count, stats.sum), (10, 55.0));
     }
 
     fn tallied(cells: &[Contents]) -> SelectionStats {
         let band = Range::parse_a1(&format!("A1:A{}", cells.len())).unwrap();
-        tally(band, &|pos: CellPos| cells[pos.row.get() as usize])
+        tally(band, &|pos: CellPos| cells[pos.row.get() as usize], &[])
     }
 
     #[test]
@@ -235,10 +256,31 @@ mod tests {
     }
 
     #[test]
+    fn rows_a_filter_hides_are_left_out_of_the_totals() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        let rows: Vec<Vec<String>> = (1..=10).map(|n| vec![n.to_string()]).collect();
+        workbook
+            .set_inputs(SheetId(0), CellPos::default(), &rows)
+            .unwrap();
+        let all = Range::parse_a1("A1:A10").unwrap();
+        let hidden = [
+            (RowIdx::clamped(1), RowIdx::clamped(3)),
+            (RowIdx::clamped(9), RowIdx::clamped(9)),
+        ];
+        let stats = compute(&workbook, SheetId(0), all, &hidden).unwrap();
+        assert_eq!((stats.count, stats.sum), (6, 36.0));
+    }
+
+    #[test]
     fn a_missing_sheet_has_no_stats() {
         let workbook = Workbook::new_empty().unwrap();
         assert_eq!(
-            compute(&workbook, SheetId(9), Range::parse_a1("A1:A10").unwrap()),
+            compute(
+                &workbook,
+                SheetId(9),
+                Range::parse_a1("A1:A10").unwrap(),
+                &[]
+            ),
             None
         );
     }
@@ -253,7 +295,7 @@ mod tests {
             .set_inputs(SheetId(0), CellPos::default(), &rows)
             .unwrap();
         let all = Range::parse_a1("A1:B30000").unwrap();
-        let stats = compute(&workbook, SheetId(0), all).unwrap();
+        let stats = compute(&workbook, SheetId(0), all, &[]).unwrap();
         assert_eq!(stats.count, 60_000);
         assert_eq!(stats.numbers, 30_000);
         assert_eq!(stats.sum, 450_015_000.0);

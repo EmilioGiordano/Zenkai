@@ -356,6 +356,7 @@ pub(crate) fn sheet_print(
         show_grid_lines,
         show_row_col_headers,
         conditional_formatting,
+        auto_filter,
     } = sheet;
     let formulas = formula_hashes(formulas)?;
     let (shares, ()) = over_rows(
@@ -390,7 +391,10 @@ pub(crate) fn sheet_print(
     )
         .hash(&mut frame);
     settings.hash(&mut frame);
-    hash_debug(&mut frame, &(state, color, conditional_formatting))?;
+    hash_debug(
+        &mut frame,
+        &(state, color, conditional_formatting, auto_filter),
+    )?;
     let frame = frame.finish();
     let mut hasher = DefaultHasher::new();
     (frame, cells).hash(&mut hasher);
@@ -423,9 +427,20 @@ pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
         theme,
     } = book;
     let mut hasher = DefaultHasher::new();
+    // workbook.xml names each AutoFilter's range in `_xlnm._FilterDatabase`.
     let sheets: Vec<_> = worksheets
         .iter()
-        .map(|sheet| (&sheet.name, sheet.sheet_id, &sheet.state))
+        .map(|sheet| {
+            let filter = sheet.auto_filter.as_ref().map(|filter| {
+                (
+                    filter.first_row,
+                    filter.first_column,
+                    filter.last_row,
+                    filter.last_column,
+                )
+            });
+            (&sheet.name, sheet.sheet_id, &sheet.state, filter)
+        })
         .collect();
     let tables: BTreeMap<_, _> = tables.iter().collect();
     hash_debug(&mut hasher, &(&sheets, defined_names, &tables, name))?;

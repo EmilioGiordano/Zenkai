@@ -1,7 +1,7 @@
 use crate::{
     expressions::types::Area,
     model::Model,
-    types::Cell,
+    types::{AutoFilter, Cell},
     user_model::history::{Diff, DiffList},
 };
 
@@ -53,6 +53,30 @@ impl PendingRecalculation {
         }
     }
 
+    // SUBTOTAL skips a row its filter hides even when it counts rows hidden by hand, so the
+    // rows that enter or leave the filter's list change what reads their cells.
+    fn add_filter_change(
+        &mut self,
+        model: &Model,
+        sheet: u32,
+        old: Option<&AutoFilter>,
+        new: Option<&AutoFilter>,
+    ) {
+        let rows = |filter: Option<&AutoFilter>| -> &[i32] {
+            filter.map_or(&[], |filter| filter.filtered_rows.as_slice())
+        };
+        let (old, new) = (rows(old), rows(new));
+        let changed: Vec<i32> = old
+            .iter()
+            .filter(|row| new.binary_search(row).is_err())
+            .chain(new.iter().filter(|row| old.binary_search(row).is_err()))
+            .copied()
+            .collect();
+        for row in changed {
+            self.add_row(model, sheet, row);
+        }
+    }
+
     // The same cells change whether `diff_list` is applied or undone.
     pub(crate) fn add(&mut self, diff_list: &DiffList, model: &Model) {
         for diff in diff_list {
@@ -93,6 +117,21 @@ impl PendingRecalculation {
                     ..
                 } => self.add_cleared(*sheet, *row, *column, old_value),
                 Diff::SetRowHidden { sheet, row, .. } => self.add_row(model, *sheet, *row),
+                Diff::FlipRowsHidden { sheet, rows, .. } => {
+                    for row in rows {
+                        self.add_row(model, *sheet, *row);
+                    }
+                }
+                Diff::SetAutoFilter {
+                    sheet,
+                    old_value,
+                    new_value,
+                } => self.add_filter_change(
+                    model,
+                    *sheet,
+                    old_value.as_deref(),
+                    new_value.as_deref(),
+                ),
                 Diff::CellClearFormatting { .. }
                 | Diff::SetCellStyle { .. }
                 | Diff::FillStyle { .. }

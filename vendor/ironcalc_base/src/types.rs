@@ -201,6 +201,72 @@ pub struct Worksheet {
     /// Whether or not to show the row numbers and column letters of the worksheet
     pub show_row_col_headers: bool,
     pub conditional_formatting: Vec<ConditionalFormatting>,
+    /// The sheet's AutoFilter, if it has one
+    pub auto_filter: Option<AutoFilter>,
+}
+
+/// A sheet's AutoFilter: the area it covers, its header row first, the criteria of its
+/// columns and the rows it hides. Rows it hides are hidden rows of the sheet too; they are
+/// listed here so that removing a criterion never shows a row hidden by hand.
+// ECMA-376-1:2016 section 18.3.1.2
+#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+pub struct AutoFilter {
+    pub first_row: i32,
+    pub first_column: i32,
+    pub last_row: i32,
+    pub last_column: i32,
+    /// At most one per column, sorted by `column`
+    pub columns: Vec<FilterColumn>,
+    /// The data rows the filter hides, sorted
+    pub filtered_rows: Vec<i32>,
+    /// The last sort of the range, kept for Excel's Reapply
+    pub sort_state: Option<SortState>,
+}
+
+// ECMA-376-1:2016 section 18.3.2.7
+#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+pub struct FilterColumn {
+    /// Offset from the first column of the filter, the file's `colId`
+    pub column: i32,
+    pub criteria: FilterCriteria,
+    pub hidden_button: bool,
+    pub show_button: bool,
+}
+
+#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+pub enum FilterCriteria {
+    /// The column filters nothing
+    None,
+    /// Rows whose shown text matches one of `values`, ignoring case, are shown, and empty
+    /// cells when `blank`
+    Values { values: Vec<String>, blank: bool },
+    /// A rule IronCalc does not evaluate (custom, dynamic, colour, icon, top 10 or date
+    /// filters), as the children of its `<filterColumn>`, written back as they are
+    Kept(String),
+}
+
+// ECMA-376-1:2016 section 18.3.1.92
+#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+pub struct SortState {
+    pub first_row: i32,
+    pub first_column: i32,
+    pub last_row: i32,
+    pub last_column: i32,
+    pub conditions: Vec<SortCondition>,
+    /// Its other attributes as written in the file, escaped, each with a leading space
+    pub attributes: String,
+}
+
+// ECMA-376-1:2016 section 18.3.1.91
+#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+pub struct SortCondition {
+    pub first_row: i32,
+    pub first_column: i32,
+    pub last_row: i32,
+    pub last_column: i32,
+    pub descending: bool,
+    /// Its other attributes as written in the file, escaped, each with a leading space
+    pub attributes: String,
 }
 
 // ECMA-376-1:2016 section 18.3.1.73

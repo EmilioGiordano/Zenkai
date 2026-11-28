@@ -5,6 +5,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 use zenkai_types::{CellPos, ColIdx, HAlign, Range, Rgb, RowIdx, VAlign, ValueKind};
 
+use crate::filter_button::{self, ButtonColors, ButtonState, FilterBar, Rect as ButtonRect};
 use crate::grid::{EditMode, Editor, GridCell};
 use crate::layout::Layout;
 use crate::paint_failure::PaintFailure;
@@ -33,6 +34,7 @@ pub struct Colors {
     error: Hsla,
     frozen: Hsla,
     frozen_alone: Hsla,
+    button: ButtonColors,
 }
 
 // Excel's selection green; a lighter tone keeps contrast on dark backgrounds.
@@ -48,6 +50,17 @@ pub fn selection_accent(is_dark: bool, high_contrast: bool) -> Hsla {
 
 // With the gridlines hidden the divider is the only line that marks the frozen panes, so
 // it is drawn at full strength to stay at least 3:1 against the background.
+// Filtered row numbers, the funnel and the button border; at least 6.2:1 on the headings.
+pub fn filter_blue(is_dark: bool, high_contrast: bool) -> Hsla {
+    if high_contrast {
+        rgb(0x5C_C8_FF).into()
+    } else if is_dark {
+        rgb(0x6A_B0_F3).into()
+    } else {
+        rgb(0x0B_5C_AD).into()
+    }
+}
+
 pub fn frozen_divider(muted_foreground: Hsla, gridlines_shown: bool) -> Hsla {
     if gridlines_shown {
         muted_foreground.opacity(0.6)
@@ -75,6 +88,15 @@ impl Colors {
             error: theme.danger,
             frozen: frozen_divider(theme.muted_foreground, true),
             frozen_alone: frozen_divider(theme.muted_foreground, false),
+            button: ButtonColors {
+                face: theme.secondary,
+                face_hover: theme.secondary_hover,
+                border: theme.border,
+                glyph: theme.muted_foreground,
+                glyph_hover: theme.foreground,
+                strong: theme.foreground,
+                filter_blue: filter_blue(theme.mode.is_dark(), high_contrast),
+            },
         }
     }
 }
@@ -103,6 +125,9 @@ pub struct Frame {
     pub header_height: f32,
     pub gridlines: bool,
     pub headings: bool,
+    pub filter: Option<Rc<FilterBar>>,
+    pub filter_open: Option<ColIdx>,
+    pub filter_hover: Option<ColIdx>,
 }
 
 const FILL_HANDLE: f32 = 7.0;
@@ -338,7 +363,8 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
                 if cell.text.is_empty() {
                     continue;
                 }
-                let overflow = if overflows_right(cell) {
+                let reserve = header_reserve(frame, pos, *w, *h);
+                let overflow = if reserve == 0.0 && overflows_right(cell) {
                     columns.xs[col_index + 1..]
                         .iter()
                         .take_while(|(next, _, _)| {
@@ -352,8 +378,8 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
                 } else {
                     0.0
                 };
-                let area = rect(origin, *x, *y, *w, *h);
-                paint_cell_text(frame, cell, area, px(w + overflow), window, cx);
+                let area = rect(origin, *x, *y, w - reserve, *h);
+                paint_cell_text(frame, cell, area, px(w - reserve + overflow), window, cx);
             }
         }
 
@@ -374,6 +400,7 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
         }
 
         paint_selection(frame, &columns, &rows, origin, bounds, window);
+        paint_filter_buttons(frame, &columns, &rows, origin, bounds, window);
         if frame.headings {
             paint_headers(
                 frame,
@@ -388,6 +415,81 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
         }
         if let Some(editor) = &frame.editor {
             paint_editor(frame, editor, &columns, &rows, origin, window, cx);
+        }
+    });
+}
+
+// How much of a header cell the filter button takes from its text.
+fn header_reserve(frame: &Frame, pos: CellPos, width: f32, height: f32) -> f32 {
+    let Some(bar) = frame.filter.as_deref() else {
+        return 0.0;
+    };
+    if !bar.is_header_cell(pos) || !bar.has_button(pos.col) {
+        return 0.0;
+    }
+    let cell = ButtonRect {
+        x: 0.0,
+        y: 0.0,
+        width,
+        height,
+    };
+    filter_button::text_reserve(cell, frame.zoom, CELL_PADDING * frame.zoom)
+}
+
+fn paint_filter_buttons(
+    frame: &Frame,
+    columns: &Columns,
+    rows: &Rows,
+    origin: Point<Pixels>,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+) {
+    let Some(bar) = frame.filter.as_deref() else {
+        return;
+    };
+    let Some((y, height)) = rows.find(bar.header_row()) else {
+        return;
+    };
+    let z = frame.zoom;
+    let body = Bounds::new(
+        point(
+            origin.x + px(frame.row_header * z),
+            origin.y + px(frame.header_height * z),
+        ),
+        size(
+            bounds.size.width - px(frame.row_header * z),
+            bounds.size.height - px(frame.header_height * z),
+        ),
+    );
+    window.with_content_mask(Some(ContentMask { bounds: body }), |window| {
+        for (col, x, width) in &columns.xs {
+            if !bar.has_button(*col) {
+                continue;
+            }
+            let cell = ButtonRect {
+                x: *x,
+                y,
+                width: *width,
+                height,
+            };
+            let Some(button) = filter_button::button_box(cell, z) else {
+                continue;
+            };
+            let state = if frame.filter_open == Some(*col) {
+                ButtonState::Open
+            } else if frame.filter_hover == Some(*col) {
+                ButtonState::Hover
+            } else {
+                ButtonState::Idle
+            };
+            filter_button::paint_button(
+                button,
+                origin,
+                state,
+                bar.is_filtered(*col),
+                frame.colors.button,
+                window,
+            );
         }
     });
 }
@@ -801,6 +903,7 @@ fn paint_headers(
     ));
     let font_size = px(12.0 * z);
     let sel = frame.selection;
+    let blue_rows = frame.filter.as_deref().and_then(FilterBar::blue_rows);
     for (col, x, w) in &columns.xs {
         // Hidden columns have no width and no label.
         if *w <= 0.0 {
@@ -838,6 +941,8 @@ fn paint_headers(
         let text_color = if active {
             window.paint_quad(fill(area, c.header_active));
             c.header_active_text
+        } else if blue_rows.is_some_and(|(first, last)| (first..=last).contains(row)) {
+            c.button.filter_blue
         } else {
             c.header_text
         };

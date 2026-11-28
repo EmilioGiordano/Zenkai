@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod auto_filter;
 mod carried_moves;
 #[cfg(test)]
 mod content_cells_property;

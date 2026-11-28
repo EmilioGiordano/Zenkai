@@ -24,7 +24,7 @@ pub struct CopyShape {
 
 impl CopyShape {
     // The one place that says which hidden lines a copy leaves out. Excel's plain copy takes
-    // manually hidden lines but skips rows a filter hides; a filter will extend the plain case.
+    // manually hidden lines and skips rows a filter hides, which `leaving_out_rows` removes.
     pub fn of(range: Range, scope: CopyScope, layout: &Layout) -> CopyShape {
         match scope {
             CopyScope::Plain => CopyShape::whole(range),
@@ -57,6 +57,33 @@ impl CopyShape {
                 .filter(|(first, _)| *first <= end.col)
                 .map(|(first, last)| (*first, (*last).min(end.col)))
                 .collect(),
+        }
+    }
+
+    // Rows the filter hides stay out of a copy and a cut, as in Excel.
+    pub fn leaving_out_rows(&self, hidden: &[(RowIdx, RowIdx)]) -> CopyShape {
+        let mut rows = self.rows.clone();
+        for (from, to) in hidden {
+            rows = rows
+                .into_iter()
+                .flat_map(|(first, last)| {
+                    if *to < first || *from > last {
+                        return vec![(first, last)];
+                    }
+                    let mut kept = Vec::new();
+                    if *from > first {
+                        kept.push((first, from.offset(-1)));
+                    }
+                    if *to < last {
+                        kept.push((to.offset(1), last));
+                    }
+                    kept
+                })
+                .collect();
+        }
+        CopyShape {
+            rows,
+            cols: self.cols.clone(),
         }
     }
 
@@ -270,6 +297,42 @@ mod tests {
         assert_eq!(shape.row_count(), 10);
         assert_eq!(shape.col_count(), 3);
         assert_eq!(shape.blocks().len(), 1);
+    }
+
+    #[test]
+    fn a_plain_copy_leaves_out_the_rows_a_filter_hides() {
+        let layout = layout_hiding(&[], &[]);
+        let shape = CopyShape::of(range("A1:B10"), CopyScope::Plain, &layout);
+        let hidden = [
+            (RowIdx::clamped(2), RowIdx::clamped(4)),
+            (RowIdx::clamped(7), RowIdx::clamped(9)),
+        ];
+        let kept = shape.leaving_out_rows(&hidden);
+        assert_eq!(row_numbers(&kept), vec![1, 2, 6, 7]);
+        assert_eq!(kept.blocks().len(), 2);
+        assert_eq!(kept.col_count(), 2);
+    }
+
+    #[test]
+    fn a_filter_hiding_the_edges_leaves_one_block() {
+        let layout = layout_hiding(&[], &[]);
+        let shape = CopyShape::of(range("A1:A10"), CopyScope::Plain, &layout);
+        let kept = shape.leaving_out_rows(&[(RowIdx::clamped(0), RowIdx::clamped(2))]);
+        assert_eq!(row_numbers(&kept), vec![4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(kept.blocks().len(), 1);
+        let none = shape.leaving_out_rows(&[(RowIdx::clamped(0), RowIdx::clamped(9))]);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_filter_that_hides_nothing_in_the_selection_changes_nothing() {
+        let layout = layout_hiding(&[], &[]);
+        let shape = CopyShape::of(range("A1:A5"), CopyScope::Plain, &layout);
+        assert_eq!(
+            shape.leaving_out_rows(&[(RowIdx::clamped(20), RowIdx::clamped(30))]),
+            shape
+        );
+        assert_eq!(shape.leaving_out_rows(&[]), shape);
     }
 
     #[test]

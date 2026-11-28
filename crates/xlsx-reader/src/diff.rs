@@ -142,6 +142,11 @@ impl Differences {
             &expected.conditional_formatting,
             &actual.conditional_formatting,
         );
+        self.value(
+            &field("AutoFilter"),
+            &expected.auto_filter,
+            &actual.auto_filter,
+        );
         let rows: BTreeSet<i32> = expected
             .sheet_data
             .rows()

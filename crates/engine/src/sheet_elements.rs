@@ -1,4 +1,4 @@
-// IronCalc reads past a sheet's filter, validation, protection and hyperlinks, and past
+// IronCalc reads past a sheet's validation, protection and hyperlinks, and past
 // the elements that point into its relationships part (drawings, comments, tables), and
 // never writes them. A save that rewrites a sheet into the file it was read from writes
 // them back, and keeps the relationships part beside it. Each element is rebuilt from
@@ -34,8 +34,10 @@ pub const MAX_WORKBOOK_ELEMENT_BYTES: usize = 4 * MAX_ELEMENT_BYTES;
 // Where an element goes among those IronCalc writes after the cell data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Place {
-    // Right after </sheetData>, before <mergeCells>.
+    // Right after </sheetData>, before the <autoFilter> IronCalc writes.
     AfterCellData,
+    // After the <autoFilter> IronCalc writes, before <mergeCells>.
+    AfterFilter,
     // After <conditionalFormatting>, before the print settings.
     BeforePrint,
     // After the page breaks, before <extLst>.
@@ -43,12 +45,11 @@ pub enum Place {
 }
 
 // The children of CT_Worksheet carried, in the order the schema requires.
-const CARRIED: [(&str, Place); 16] = [
+const CARRIED: [(&str, Place); 15] = [
     ("sheetCalcPr", Place::AfterCellData),
     ("sheetProtection", Place::AfterCellData),
     ("protectedRanges", Place::AfterCellData),
-    ("autoFilter", Place::AfterCellData),
-    ("sortState", Place::AfterCellData),
+    ("sortState", Place::AfterFilter),
     ("dataValidations", Place::BeforePrint),
     ("hyperlinks", Place::BeforePrint),
     ("ignoredErrors", Place::AfterBreaks),
@@ -653,40 +654,48 @@ mod tests {
     }
 
     fn written(elements: &Elements) -> String {
-        [Place::AfterCellData, Place::BeforePrint, Place::AfterBreaks]
-            .into_iter()
-            .map(|place| at(elements, place))
-            .collect()
+        [
+            Place::AfterCellData,
+            Place::AfterFilter,
+            Place::BeforePrint,
+            Place::AfterBreaks,
+        ]
+        .into_iter()
+        .map(|place| at(elements, place))
+        .collect()
     }
 
     #[test]
     fn foreign_attributes_and_extension_lists_are_left_out() {
-        let filter = elements(concat!(
-            r#"<autoFilter ref="A1:C9" xr:uid="{0}"><filterColumn colId="0"><filters>"#,
-            r#"<filter val="a&amp;b"/></filters></filterColumn><extLst><ext uri="u">"#,
-            r#"<x14:f xmlns:x14="urn:x14"/></ext></extLst></autoFilter>"#
+        let validations = elements(concat!(
+            r#"<dataValidations count="1" xr:uid="{0}"><dataValidation sqref="A1:C9" "#,
+            r#"prompt="a&amp;b"/><extLst><ext uri="u">"#,
+            r#"<x14:f xmlns:x14="urn:x14"/></ext></extLst></dataValidations>"#
         ));
         assert_eq!(
-            at(&filter, Place::AfterCellData),
+            at(&validations, Place::BeforePrint),
             concat!(
-                r#"<autoFilter ref="A1:C9"><filterColumn colId="0"><filters>"#,
-                r#"<filter val="a&amp;b"/></filters></filterColumn></autoFilter>"#
+                r#"<dataValidations count="1"><dataValidation sqref="A1:C9" "#,
+                r#"prompt="a&amp;b"/></dataValidations>"#
             )
         );
-        assert_eq!(filter.kinds(), BTreeSet::from([Unsupported::AutoFilter]));
+        assert_eq!(
+            validations.kinds(),
+            BTreeSet::from([Unsupported::DataValidation])
+        );
     }
 
     #[test]
     fn an_element_excel_extends_in_the_extension_list_is_not_kept() {
         let validations = elements(concat!(
             r#"<dataValidations count="1"><dataValidation sqref="A1"/></dataValidations>"#,
-            r#"<autoFilter ref="A1:B2"/><extLst><ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}" "#,
+            r#"<sheetProtection sheet="1"/><extLst><ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}" "#,
             r#"xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">"#,
             r#"<x14:dataValidations count="1"/></ext></extLst>"#
         ));
         assert_eq!(
             validations.kinds(),
-            BTreeSet::from([Unsupported::AutoFilter])
+            BTreeSet::from([Unsupported::SheetProtection])
         );
     }
 
@@ -714,7 +723,7 @@ mod tests {
         assert!(links.kinds().is_empty());
         let strict = parsed(concat!(
             r#"<worksheet xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main">"#,
-            r#"<autoFilter ref="A1:B2"/></worksheet>"#
+            r#"<sortState ref="A1:B2"/></worksheet>"#
         ));
         assert_eq!(strict, Elements::default());
     }
@@ -722,12 +731,12 @@ mod tests {
     #[test]
     fn every_element_pointing_into_the_relationships_is_kept_or_none_is() {
         let mixed = elements(concat!(
-            r#"<autoFilter ref="A1:B2"/><drawing r:id="rId1"/>"#,
+            r#"<sortState ref="A1:B2"/><drawing r:id="rId1"/>"#,
             r#"<legacyDrawing xmlns:s="http://purl.oclc.org/ooxml/officeDocument/relationships" "#,
             r#"s:id="rId2"/>"#
         ));
         assert_eq!(mixed.relationships(), Relationships::Dropped);
-        assert_eq!(written(&mixed), r#"<autoFilter ref="A1:B2"/>"#);
+        assert_eq!(written(&mixed), r#"<sortState ref="A1:B2"/>"#);
         let links = elements(concat!(
             r#"<hyperlinks><hyperlink ref="A1" r:id="rId1"/></hyperlinks>"#,
             r#"<drawing r:id="rId2"/>"#
@@ -737,7 +746,7 @@ mod tests {
         assert_eq!(links.left_in(Remains::All), links);
         // A sheet keeps its relationships with no element pointing into them: pivot tables
         // and comments are reached through the part alone.
-        let filter = elements(r#"<autoFilter ref="A1:B2"/>"#);
+        let filter = elements(r#"<sortState ref="A1:B2"/>"#);
         assert_eq!(filter.relationships(), Relationships::Kept);
         let unlinked = filter.left_in(Remains::Unlinked);
         assert_eq!(unlinked.relationships(), Relationships::Dropped);
@@ -750,12 +759,16 @@ mod tests {
         let sheet = elements(concat!(
             r#"<tableParts count="1"><tablePart r:id="rId3"/></tableParts>"#,
             r#"<hyperlinks><hyperlink ref="B2" location="A1"/></hyperlinks>"#,
-            r#"<autoFilter ref="A1:B2"/><sheetProtection sheet="1"/><drawing r:id="rId1"/>"#,
+            r#"<sortState ref="A1:B2"/><sheetProtection sheet="1"/><drawing r:id="rId1"/>"#,
             r#"<dataValidations count="1"><dataValidation sqref="C3"/></dataValidations>"#
         ));
         assert_eq!(
             at(&sheet, Place::AfterCellData),
-            r#"<sheetProtection sheet="1"/><autoFilter ref="A1:B2"/>"#
+            r#"<sheetProtection sheet="1"/>"#
+        );
+        assert_eq!(
+            at(&sheet, Place::AfterFilter),
+            r#"<sortState ref="A1:B2"/>"#
         );
         assert_eq!(
             at(&sheet, Place::BeforePrint),
@@ -791,13 +804,16 @@ mod tests {
 
     #[test]
     fn a_move_keeps_only_the_elements_it_cannot_shift() {
-        let mut filter = elements(r#"<autoFilter ref="A1:C10"/><sheetProtection sheet="1"/>"#);
-        filter.moved(Axis::Rows, 11);
-        filter.moved(Axis::Columns, 4);
-        assert_eq!(filter.kinds().len(), 2);
-        filter.moved(Axis::Rows, 10);
+        let mut ranged = elements(concat!(
+            r#"<dataValidations count="1"><dataValidation sqref="A1:C10"/></dataValidations>"#,
+            r#"<sheetProtection sheet="1"/>"#
+        ));
+        ranged.moved(Axis::Rows, 11);
+        ranged.moved(Axis::Columns, 4);
+        assert_eq!(ranged.kinds().len(), 2);
+        ranged.moved(Axis::Rows, 10);
         assert_eq!(
-            filter.kinds(),
+            ranged.kinds(),
             BTreeSet::from([Unsupported::SheetProtection])
         );
 
@@ -999,7 +1015,7 @@ mod tests {
 
     #[test]
     fn a_save_takes_the_elements_without_copying_their_text() {
-        let sheet = elements(r#"<autoFilter ref="A1:B2"/><drawing r:id="rId1"/>"#);
+        let sheet = elements(r#"<sortState ref="A1:B2"/><drawing r:id="rId1"/>"#);
         let taken = sheet.left_in(Remains::All);
         let pairs: Vec<_> = taken.all().zip(sheet.all()).collect();
         assert_eq!(pairs.len(), 2);
@@ -1014,9 +1030,9 @@ mod tests {
 
     #[test]
     fn the_hash_follows_the_text_and_what_a_move_drops() {
-        let filter = r#"<autoFilter ref="A1:B2"/>"#;
+        let filter = r#"<sortState ref="A1:B2"/>"#;
         assert_eq!(hashed(&elements(filter)), hashed(&elements(filter)));
-        let other = r#"<autoFilter ref="A1:B3"/>"#;
+        let other = r#"<sortState ref="A1:B3"/>"#;
         assert_ne!(hashed(&elements(filter)), hashed(&elements(other)));
         let mut moved = elements(filter);
         moved.moved(Axis::Rows, 1);
@@ -1025,7 +1041,9 @@ mod tests {
 
     #[test]
     fn whole_columns_reach_every_row() {
-        let mut columns = elements(r#"<autoFilter ref="A:C"/>"#);
+        let mut columns = elements(
+            r#"<dataValidations count="1"><dataValidation sqref="A:C"/></dataValidations>"#,
+        );
         columns.moved(Axis::Rows, 1_048_576);
         assert!(columns.kinds().is_empty());
     }
@@ -1047,7 +1065,7 @@ mod tests {
     #[test]
     fn sheets_past_the_workbook_budget_keep_nothing() {
         assert_eq!(ElementBudget::workbook().left, MAX_WORKBOOK_ELEMENT_BYTES);
-        let filter = r#"<autoFilter ref="A1:B2"/>"#;
+        let filter = r#"<sortState ref="A1:B2"/>"#;
         let calc = "<sheetCalcPr/>";
         let mut budget = ElementBudget {
             left: 2 * filter.len(),
@@ -1069,8 +1087,8 @@ mod tests {
 
     #[test]
     fn an_element_past_the_budget_in_the_file_is_not_rebuilt() {
-        let filter = r#"<autoFilter ref="A1:B2"/>"#;
-        let tagged = r#"<autoFilter ref="A1:B2" xr:uid="{00000000-0000-0000-0000-000000000001}"/>"#;
+        let filter = r#"<sortState ref="A1:B2"/>"#;
+        let tagged = r#"<sortState ref="A1:B2" xr:uid="{00000000-0000-0000-0000-000000000001}"/>"#;
         let mut budget = ElementBudget { left: filter.len() };
         assert_eq!(elements_within(tagged, &mut budget), Elements::default());
         let mut budget = ElementBudget { left: filter.len() };

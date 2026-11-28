@@ -21,10 +21,10 @@ Content of a kind Zenkai does not detect (embedded objects, form controls) is ne
 | image.xlsx | yes | images and shapes | drawings, images, writer version (not content), workbook flags (not content) | - | 1/1 | 1/1 |
 | issues.ods | read-only values (6 sheets) | - | - | - | - | - |
 | issues.xls | read-only values (5 sheets) | - | - | - | - | - |
-| layout-print-protection.xlsx | yes | filters (AutoFilter), sheet protection | autofilter, writer version (not content), sheet protection, workbook flags (not content) | - | 5/5 | 5/5 |
+| layout-print-protection.xlsx | yes | sheet protection | writer version (not content), sheet protection, workbook flags (not content) | - | 5/5 | 5/5 |
 | merges-freeze-sizes.xlsx | yes | - | writer version (not content), workbook flags (not content) | - | 39/39 | 39/39 |
 | notes.xlsx | yes | images and shapes, comments | drawings, comments, writer version (not content), workbook flags (not content) | - | 1/1 | 1/1 |
 | page-layout-outline.xlsx | yes | - | writer version (not content), workbook flags (not content) | - | 24/24 | 24/24 |
 | sheet-edges.xlsx | yes | - | writer version (not content), workbook flags (not content) | - | 3/3 | 3/3 |
-| table.xlsx | yes | Excel tables, filters (AutoFilter) | tables, writer version (not content), workbook flags (not content) | - | 12/12 | 12/12 |
+| table.xlsx | yes | Excel tables | tables, writer version (not content), workbook flags (not content) | - | 12/12 | 12/12 |
 | unicode.xlsx | yes | - | writer version (not content), workbook flags (not content) | - | 7/7 | 7/7 |

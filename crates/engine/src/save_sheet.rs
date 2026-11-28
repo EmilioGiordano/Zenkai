@@ -103,14 +103,17 @@ enum Stage {
 pub(crate) struct SheetWriter<'a, W: Write> {
     inner: W,
     settings: Option<&'a SheetSettings>,
+    // The <sheetPr> element, see `sheet_properties`.
+    properties: String,
     stage: Stage,
 }
 
 impl<'a, W: Write> SheetWriter<'a, W> {
-    pub(crate) fn new(inner: W, settings: Option<&'a SheetSettings>) -> Self {
+    pub(crate) fn new(inner: W, settings: Option<&'a SheetSettings>, properties: String) -> Self {
         SheetWriter {
             inner,
             settings,
+            properties,
             stage: Stage::Head(Vec::new()),
         }
     }
@@ -149,6 +152,7 @@ impl<'a, W: Write> SheetWriter<'a, W> {
                     };
                     let rest = head.split_off(at + SHEET_DATA.len());
                     let head = String::from_utf8(std::mem::take(head)).map_err(other_utf8)?;
+                    let head = with_properties(head, &self.properties)?;
                     let head = match self.settings {
                         Some(settings) => with_head_settings(head, settings)?,
                         None => head,
@@ -235,10 +239,28 @@ pub(crate) fn with_row_outline(
     Ok(out)
 }
 
-// The places below are where IronCalc's exporter writes these elements' neighbours;
-// CT_Worksheet requires its children in a fixed order.
-fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<String> {
-    let mut head = head;
+// The sheet's <sheetPr>: the one carried from the file, with Excel's filterMode flag on
+// while the sheet's AutoFilter hides rows and off otherwise.
+pub(crate) fn sheet_properties(settings: Option<&SheetSettings>, sheet: &Worksheet) -> String {
+    let carried = settings.map_or("", |settings| settings.properties.as_str());
+    let filtering = sheet
+        .auto_filter
+        .as_ref()
+        .is_some_and(|filter| filter.has_criteria() && !filter.filtered_rows.is_empty());
+    if !filtering {
+        return carried.to_string();
+    }
+    match carried.strip_prefix("<sheetPr>") {
+        Some(inner) => format!(r#"<sheetPr filterMode="1">{inner}"#),
+        None => r#"<sheetPr filterMode="1"/>"#.to_string(),
+    }
+}
+
+// <sheetPr> is the root's first child.
+fn with_properties(mut head: String, properties: &str) -> io::Result<String> {
+    if properties.is_empty() {
+        return Ok(head);
+    }
     let root = head
         .find("<worksheet")
         .ok_or_else(|| other("the written sheet has no root"))?;
@@ -247,7 +269,14 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
         .ok_or_else(|| other("the written root is not closed"))?
         + root
         + 1;
-    head.insert_str(root_end, &settings.properties);
+    head.insert_str(root_end, properties);
+    Ok(head)
+}
+
+// The places below are where IronCalc's exporter writes these elements' neighbours;
+// CT_Worksheet requires its children in a fixed order.
+fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<String> {
+    let mut head = head;
     let view = r#"<sheetView workbookViewId="0""#;
     let at = head
         .find(view)
@@ -271,8 +300,46 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
     .map_err(other)
 }
 
-// `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
-// and its own <extLst> after it.
+// IronCalc writes the sheet's <autoFilter> before its other elements. Its texts are
+// escaped, so every `<` in it starts a tag; a rule it keeps may hold another <autoFilter>,
+// so the filter ends where its tags balance.
+fn filter_length(elements: &str) -> usize {
+    const OPEN: &[u8] = b"<autoFilter";
+    const END: &[u8] = b"</autoFilter>";
+    let bytes = elements.as_bytes();
+    if !bytes.starts_with(OPEN) {
+        return 0;
+    }
+    let mut depth = 0usize;
+    let mut at = 0;
+    while let Some(found) = bytes[at..].iter().position(|b| *b == b'<') {
+        let tag = at + found;
+        let tag_end = bytes[tag..]
+            .iter()
+            .position(|b| *b == b'>')
+            .map_or(bytes.len(), |end| tag + end + 1);
+        let written = &bytes[tag..tag_end];
+        if written.starts_with(END) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return tag_end;
+            }
+        } else if written.starts_with(OPEN)
+            && matches!(written.get(OPEN.len()), Some(b' ' | b'>' | b'/'))
+        {
+            if !written.ends_with(b"/>") {
+                depth += 1;
+            } else if depth == 0 {
+                return tag_end;
+            }
+        }
+        at = tag_end;
+    }
+    bytes.len()
+}
+
+// `tail` starts with </sheetData>; IronCalc writes <autoFilter>, <mergeCells>,
+// <conditionalFormatting> and its own <extLst> after it.
 fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io::Result<()> {
     let rest = tail
         .strip_prefix(SHEET_DATA_END)
@@ -282,8 +349,11 @@ fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io:
         .or_else(|| rest.rfind("</worksheet>"))
         .ok_or_else(|| other("the written sheet is not closed"))?;
     let (ironcalc_elements, closing) = rest.split_at(at);
+    let (filter, ironcalc_elements) = ironcalc_elements.split_at(filter_length(ironcalc_elements));
     out.write_all(SHEET_DATA_END.as_bytes())?;
     settings.elements.write_at(out, Place::AfterCellData)?;
+    out.write_all(filter.as_bytes())?;
+    settings.elements.write_at(out, Place::AfterFilter)?;
     out.write_all(ironcalc_elements.as_bytes())?;
     settings.write_trailing_elements(out)?;
     out.write_all(closing.as_bytes())
@@ -388,7 +458,8 @@ mod tests {
     }
 
     fn streamed(xml: &str, settings: Option<&SheetSettings>, piece: usize) -> String {
-        let mut writer = SheetWriter::new(Vec::new(), settings);
+        let properties = settings.map_or(String::new(), |s| s.properties.clone());
+        let mut writer = SheetWriter::new(Vec::new(), settings, properties);
         for chunk in xml.as_bytes().chunks(piece) {
             std::io::Write::write_all(&mut writer, chunk).unwrap();
         }
@@ -414,7 +485,7 @@ mod tests {
 
     #[test]
     fn a_sheet_without_its_data_end_is_an_error() {
-        let mut writer = SheetWriter::new(Vec::new(), None);
+        let mut writer = SheetWriter::new(Vec::new(), None, String::new());
         std::io::Write::write_all(&mut writer, b"<worksheet><sheetData><row r=\"1\">").unwrap();
         assert!(writer.finish().is_err());
     }
@@ -424,7 +495,7 @@ mod tests {
         let source = concat!(
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" "#,
             r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
-            r#"<sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/>"#,
+            r#"<sheetData/><sheetProtection sheet="1"/><sortState ref="A2:B2"/>"#,
             r#"<hyperlinks><hyperlink ref="A1" r:id="rId2"/></hyperlinks><pageMargins left="0.7" "#,
             r#"right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><rowBreaks "#,
             r#"count="1" manualBreakCount="1"><brk id="5" max="16383" man="1"/></rowBreaks>"#,
@@ -434,13 +505,14 @@ mod tests {
         let settings = crate::sheet_settings::read(source, &mut budget);
         let xml = concat!(
             "<worksheet><sheetViews><sheetView workbookViewId=\"0\"></sheetView></sheetViews>",
-            "<sheetData><row r=\"1\"/></sheetData><mergeCells/>",
+            "<sheetData><row r=\"1\"/></sheetData><autoFilter ref=\"A1:B2\"/><mergeCells/>",
             "<conditionalFormatting/><extLst/></worksheet>"
         );
         let order = [
             "</sheetData>",
             "<sheetProtection",
             "<autoFilter",
+            "<sortState",
             "<mergeCells",
             "<conditionalFormatting",
             "<hyperlinks",
@@ -456,6 +528,23 @@ mod tests {
             assert!(positions.iter().all(Option::is_some), "{written}");
             assert!(positions.is_sorted(), "{written}");
         }
+    }
+
+    #[test]
+    fn the_filter_ironcalc_writes_ends_at_its_first_end_tag() {
+        let closed = r#"<autoFilter ref="A1:B2"/>"#;
+        let full = r#"<autoFilter ref="A1:B2"><filterColumn colId="0"/></autoFilter>"#;
+        let nested = concat!(
+            r#"<autoFilter ref="A1:B2"><filterColumn colId="0"><top10><autoFilter/>"#,
+            r#"<autoFilter xmlns="urn:x"><x/></autoFilter></top10></filterColumn></autoFilter>"#
+        );
+        for filter in [closed, full, nested] {
+            assert_eq!(
+                super::filter_length(&format!("{filter}<mergeCells/>")),
+                filter.len()
+            );
+        }
+        assert_eq!(super::filter_length("<mergeCells/>"), 0);
     }
 
     #[test]

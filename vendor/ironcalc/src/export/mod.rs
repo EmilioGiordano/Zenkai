@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod _rels;
+pub(crate) mod auto_filter;
 mod conditional_formatting;
 mod doc_props;
 mod dxfs_styles;

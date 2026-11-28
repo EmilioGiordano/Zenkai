@@ -112,7 +112,6 @@ fn unsupported_label(unsupported: Unsupported) -> &'static str {
         Unsupported::Hyperlinks => t!("unsupported.hyperlinks"),
         Unsupported::DataValidation => t!("unsupported.data_validation"),
         Unsupported::ExternalLinks => t!("unsupported.external_links"),
-        Unsupported::AutoFilter => t!("unsupported.auto_filter"),
         Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
         Unsupported::Outline => t!("unsupported.outline"),
         Unsupported::PageBreaks => t!("unsupported.page_breaks"),
@@ -1601,13 +1600,13 @@ mod tests {
 
     #[test]
     fn a_save_goes_ahead_only_when_it_drops_nothing_unaccepted() {
-        let filter = [Unsupported::AutoFilter];
-        let both = [Unsupported::Charts, Unsupported::AutoFilter];
+        let links = [Unsupported::Hyperlinks];
+        let both = [Unsupported::Charts, Unsupported::Hyperlinks];
         assert!(allows(&[], &[]));
-        assert!(!allows(&[], &filter));
-        assert!(allows(&filter, &filter));
-        assert!(!allows(&filter, &both));
-        assert!(allows(&both, &filter));
+        assert!(!allows(&[], &links));
+        assert!(allows(&links, &links));
+        assert!(!allows(&links, &both));
+        assert!(allows(&both, &links));
     }
 
     #[test]
@@ -1627,13 +1626,16 @@ mod tests {
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
     }
 
-    fn filtered_file(path: &Path) {
+    // A link on the first sheet to a cell of the second.
+    fn linked_file(path: &Path) {
         let mut source = rust_xlsxwriter::Workbook::new();
         let sheet = source.add_worksheet();
         for row in 0..3 {
             sheet.write_number(row, 0, f64::from(row)).unwrap();
         }
-        sheet.autofilter(0, 0, 2, 0).unwrap();
+        sheet.write_url(6, 0, "internal:Other!A5").unwrap();
+        let other = source.add_worksheet().set_name("Other").unwrap();
+        other.write_number(4, 0, 5.0).unwrap();
         source.save(path).unwrap();
     }
 
@@ -1644,13 +1646,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let original = dir.path().join("original.xlsx");
         let copy = dir.path().join("copy.xlsx");
-        filtered_file(&original);
+        linked_file(&original);
         let before = std::fs::read(&original).unwrap();
         let opened = zenkai_engine::open_xlsx(&original).unwrap();
-        assert_eq!(opened.unsupported, [Unsupported::AutoFilter]);
+        assert_eq!(opened.unsupported, [Unsupported::Hyperlinks]);
         let mut book = opened.workbook;
-        // Zenkai cannot shift the range a filter names, so a row inserted through it drops it.
-        book.insert_rows(SheetId(0), RowIdx::clamped(1), 1).unwrap();
+        // Zenkai cannot shift where a link points, so a row inserted on its target drops it.
+        book.insert_rows(SheetId(1), RowIdx::clamped(1), 1).unwrap();
         let shared = RwLock::new(book);
 
         let written = write_document_copy(&shared, &copy, zenkai_engine::save_xlsx).unwrap();
@@ -1659,12 +1661,12 @@ mod tests {
             written,
             CopyWritten {
                 kept: Vec::new(),
-                lacks: vec![Unsupported::AutoFilter],
+                lacks: vec![Unsupported::Hyperlinks],
             }
         );
         assert_eq!(
             copy_lacks_notice(&written.lacks).unwrap(),
-            "The copy does not include: filters (AutoFilter)"
+            "The copy does not include: hyperlinks"
         );
         assert!(zenkai_engine::open_xlsx(&copy).is_ok());
         assert_eq!(std::fs::read(&original).unwrap(), before);
@@ -1675,12 +1677,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let original = dir.path().join("original.xlsx");
         let copy = dir.path().join("copy.xlsx");
-        filtered_file(&original);
+        linked_file(&original);
         let shared = RwLock::new(zenkai_engine::open_xlsx(&original).unwrap().workbook);
 
         let written = write_document_copy(&shared, &copy, zenkai_engine::save_xlsx).unwrap();
 
-        assert_eq!(written.kept, [Unsupported::AutoFilter]);
+        assert_eq!(written.kept, [Unsupported::Hyperlinks]);
         assert!(written.lacks.is_empty());
         assert_eq!(copy_lacks_notice(&written.lacks), None);
     }

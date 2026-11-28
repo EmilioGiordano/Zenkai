@@ -1,3 +1,4 @@
+mod auto_filter;
 mod conditional_formatting;
 mod metadata;
 pub(crate) mod shared_strings;
@@ -177,6 +178,17 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
     for dn in &mut workbook.defined_names {
         dn.formula = reparse_formula_hack(&dn.formula, &worksheet_names)?;
     }
+    // The export writes a filtered sheet's `_xlnm._FilterDatabase` from its AutoFilter, so
+    // the name follows the filter as it changes.
+    let filtered_sheets: Vec<u32> = worksheets
+        .iter()
+        .filter(|sheet| sheet.auto_filter.is_some())
+        .map(|sheet| sheet.sheet_id)
+        .collect();
+    workbook.defined_names.retain(|dn| {
+        !(crate::export::auto_filter::is_filter_database(&dn.name)
+            && dn.sheet_id.is_some_and(|id| filtered_sheets.contains(&id)))
+    });
     let metadata = match load_metadata(&mut archive) {
         Ok(metadata) => metadata,
         Err(_) => {

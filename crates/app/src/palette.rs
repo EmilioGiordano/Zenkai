@@ -251,6 +251,26 @@ pub fn table() -> Vec<Group> {
             ],
         ),
         group(
+            t!("palette.group.data"),
+            [
+                item(t!("palette.filter_toggle"), ToggleAutoFilter),
+                item(t!("palette.clear_filters"), ClearAllFilters),
+                item(t!("palette.open_filter_list"), OpenFilterList),
+                item(t!("palette.cancel_filter"), CancelFilter),
+                item(t!("palette.filter_close"), CloseFilterList),
+                item(t!("palette.filter_up"), FilterListUp),
+                item(t!("palette.filter_down"), FilterListDown),
+                item(t!("palette.filter_home"), FilterListHome),
+                item(t!("palette.filter_end"), FilterListEnd),
+                item(t!("palette.filter_page_up"), FilterListPageUp),
+                item(t!("palette.filter_page_down"), FilterListPageDown),
+                item(t!("palette.filter_toggle_value"), FilterListToggle),
+                item(t!("palette.filter_confirm"), FilterListConfirm),
+                item(t!("palette.filter_next_stop"), FilterListNextStop),
+                item(t!("palette.filter_previous_stop"), FilterListPreviousStop),
+            ],
+        ),
+        group(
             t!("palette.group.view"),
             [
                 item(t!("palette.zoom_in"), ZoomIn),
@@ -410,7 +430,10 @@ mod tests {
     use zenkai_i18n::t;
 
     use super::{Toggle, Toggles, table};
-    use crate::actions::{ToggleFormulaBar, ToggleFormulas, ToggleGridlines, ToggleHeadings};
+    use crate::actions::{
+        CancelFilter, ClearAllFilters, OpenFilterList, ToggleAutoFilter, ToggleFormulaBar,
+        ToggleFormulas, ToggleGridlines, ToggleHeadings,
+    };
 
     const SHOWN: Toggles = Toggles {
         gridlines: Some(true),
@@ -473,6 +496,30 @@ mod tests {
                 ToggleHeadings.name()
             ]
         );
+    }
+
+    #[test]
+    fn the_data_group_holds_the_filter_commands_and_follows_insert() {
+        let table = table();
+        let labels: Vec<&str> = table.iter().map(|group| group.label).collect();
+        let data = labels
+            .iter()
+            .position(|label| *label == t!("palette.group.data"))
+            .unwrap();
+        assert_eq!(labels[data - 1], t!("palette.group.insert"));
+        let names: Vec<&str> = table[data]
+            .entries
+            .iter()
+            .map(|entry| entry.action.name())
+            .collect();
+        for action in [
+            ToggleAutoFilter.name(),
+            ClearAllFilters.name(),
+            OpenFilterList.name(),
+            CancelFilter.name(),
+        ] {
+            assert!(names.contains(&action), "{action}");
+        }
     }
 
     #[test]

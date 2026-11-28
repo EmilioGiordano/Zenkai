@@ -392,6 +392,25 @@ impl<'a> UserModel<'a> {
                 } => {
                     self.model.set_show_row_col_headers(*sheet, *old_value)?;
                 }
+                Diff::SetAutoFilter {
+                    sheet,
+                    old_value,
+                    new_value: _,
+                } => {
+                    needs_evaluation = true;
+                    self.model
+                        .set_auto_filter(*sheet, old_value.as_deref().cloned())?;
+                }
+                Diff::FlipRowsHidden {
+                    sheet,
+                    rows,
+                    created,
+                } => {
+                    needs_evaluation = true;
+                    let worksheet = self.model.workbook.worksheet_mut(*sheet)?;
+                    worksheet.flip_rows_hidden(rows);
+                    worksheet.remove_row_entries(created);
+                }
                 Diff::SetTheme {
                     old_value,
                     new_value: _,
@@ -467,6 +486,7 @@ impl<'a> UserModel<'a> {
                     worksheet.cols = old_data.cols.clone();
                     worksheet.show_grid_lines = old_data.show_grid_lines;
                     worksheet.show_row_col_headers = old_data.show_row_col_headers;
+                    worksheet.auto_filter = old_data.auto_filter.clone();
                     worksheet.frozen_columns = old_data.frozen_columns;
                     worksheet.frozen_rows = old_data.frozen_rows;
                     worksheet.state = old_data.state.clone();
@@ -942,6 +962,25 @@ impl<'a> UserModel<'a> {
                     new_value,
                 } => {
                     self.model.set_show_row_col_headers(*sheet, *new_value)?;
+                }
+                Diff::SetAutoFilter {
+                    sheet,
+                    old_value: _,
+                    new_value,
+                } => {
+                    needs_evaluation = true;
+                    self.model
+                        .set_auto_filter(*sheet, new_value.as_deref().cloned())?;
+                }
+                Diff::FlipRowsHidden {
+                    sheet,
+                    rows,
+                    created,
+                } => {
+                    needs_evaluation = true;
+                    let worksheet = self.model.workbook.worksheet_mut(*sheet)?;
+                    worksheet.add_default_rows(created);
+                    worksheet.flip_rows_hidden(rows);
                 }
                 Diff::SetTheme {
                     old_value: _,

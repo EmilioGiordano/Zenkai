@@ -19,7 +19,7 @@ use crate::held::Held;
 use crate::preflight::run_with_engine_stack;
 use crate::save_parts::PartWriter;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
-use crate::save_sheet::{SheetWriter, prepare};
+use crate::save_sheet::{SheetWriter, prepare, sheet_properties};
 use crate::saved::{
     Contents, KnownFile, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, same_file,
     selected_sheet, sheet_prints,
@@ -365,7 +365,8 @@ pub(crate) fn write_sheet<W: Write + Seek>(
 ) -> Result<(), EngineError> {
     parts.start_generated(&job.part)?;
     let dimension = prepare(&mut job.sheet, job.settings.as_ref());
-    let mut sheet_writer = SheetWriter::new(&mut *parts, job.settings.as_ref());
+    let properties = sheet_properties(job.settings.as_ref(), &job.sheet);
+    let mut sheet_writer = SheetWriter::new(&mut *parts, job.settings.as_ref(), properties);
     let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, &mut sheet_writer);
     write_worksheet_xml(
         &mut buffered,

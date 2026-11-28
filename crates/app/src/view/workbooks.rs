@@ -377,8 +377,9 @@ impl Workspace {
             self.show_empty(window, cx);
             return;
         };
+        self.filter_list = None;
         self.forget_find_results();
-        let sheet = self.sheet_view();
+        let sheet = self.shown_sheet_view();
         self.grid.update(cx, |grid, cx| {
             grid.reset(sheet, cx);
             grid.restore_view(view, cx);

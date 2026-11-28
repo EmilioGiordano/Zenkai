@@ -78,7 +78,6 @@ pub(crate) fn element_kind(name: &str) -> Option<Unsupported> {
     match name {
         "hyperlinks" => Some(Unsupported::Hyperlinks),
         "dataValidations" => Some(Unsupported::DataValidation),
-        "autoFilter" => Some(Unsupported::AutoFilter),
         "sheetProtection" => Some(Unsupported::SheetProtection),
         "sparklineGroups" => Some(Unsupported::Sparklines),
         "slicerList" | "timelineRefs" => Some(Unsupported::Slicers),
@@ -204,9 +203,10 @@ mod tests {
         assert!(check_part(deep.as_bytes()).is_err());
     }
 
+    // The model keeps a filter and every rule in it, so a filter is nothing to warn about.
     #[test]
-    fn reports_hyperlinks_and_validation() {
-        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/><dataValidations count="0"/><hyperlinks/></worksheet>"#;
+    fn reports_hyperlinks_and_validation_but_not_filters() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"><filterColumn colId="0"><customFilters><customFilter val="1"/></customFilters></filterColumn></autoFilter><dataValidations count="0"/><hyperlinks/></worksheet>"#;
         let mut found = check_part(xml.as_bytes()).unwrap();
         found.sort();
         assert_eq!(
@@ -214,7 +214,6 @@ mod tests {
             [
                 Unsupported::Hyperlinks,
                 Unsupported::DataValidation,
-                Unsupported::AutoFilter,
                 Unsupported::SheetProtection
             ]
         );

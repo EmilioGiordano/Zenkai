@@ -38,6 +38,7 @@ use ironcalc_base::{
     LAST_COLUMN,
 };
 
+use crate::export::auto_filter::get_auto_filter_xml;
 use crate::export::conditional_formatting::get_conditional_formatting_xml;
 
 use super::{escape::escape_xml, xml_constants::XML_DECLARATION};
@@ -282,6 +283,7 @@ pub fn write_worksheet_xml<W: Write>(
 
     let (cf_sections, cf_ext_lst) =
         get_conditional_formatting_xml(&worksheet.conditional_formatting);
+    let auto_filter = get_auto_filter_xml(worksheet.auto_filter.as_ref());
 
     write!(
         writer,
@@ -324,6 +326,7 @@ pub fn write_worksheet_xml<W: Write>(
     write!(
         writer,
         "</sheetData>\
+  {auto_filter}\
   {merge_cells_section}\
   {cf_sections}\
   {cf_ext_lst}\

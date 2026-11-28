@@ -7,10 +7,16 @@ pub const SHOW_AFTER: Duration = Duration::from_millis(300);
 pub enum LongJob {
     Autosaving,
     Calculating,
+    Filtering,
     Saving,
 }
 
-const JOBS: [LongJob; 3] = [LongJob::Autosaving, LongJob::Calculating, LongJob::Saving];
+const JOBS: [LongJob; 4] = [
+    LongJob::Autosaving,
+    LongJob::Calculating,
+    LongJob::Filtering,
+    LongJob::Saving,
+];
 
 #[derive(Default)]
 struct Running {
@@ -20,7 +26,7 @@ struct Running {
 
 #[derive(Default)]
 pub struct JobPill {
-    running: [Running; 3],
+    running: [Running; 4],
 }
 
 impl JobPill {
@@ -88,6 +94,21 @@ mod tests {
         assert_eq!(pill.shown(later), Some(LongJob::Calculating));
         pill.end(LongJob::Calculating);
         assert_eq!(pill.shown(later), Some(LongJob::Autosaving));
+    }
+
+    #[test]
+    fn filtering_outranks_calculating_and_yields_to_saving() {
+        let start = Instant::now();
+        let mut pill = JobPill::default();
+        pill.start(LongJob::Calculating, start);
+        pill.start(LongJob::Filtering, start);
+        let later = after(start, 500);
+        assert_eq!(pill.shown(later), Some(LongJob::Filtering));
+        pill.start(LongJob::Saving, start);
+        assert_eq!(pill.shown(later), Some(LongJob::Saving));
+        pill.end(LongJob::Saving);
+        pill.end(LongJob::Filtering);
+        assert_eq!(pill.shown(later), Some(LongJob::Calculating));
     }
 
     #[test]

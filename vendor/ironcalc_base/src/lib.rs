@@ -27,6 +27,7 @@
 
 #![warn(clippy::print_stdout)]
 
+pub mod auto_filter;
 pub mod builtin_styles;
 pub mod calc_result;
 pub mod cell;

@@ -20,8 +20,9 @@ use crate::sheet_settings::{Carried, SheetSettings};
 use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, ContentSpan, Contents,
-    DefinedName, HAlign, LineAxis, LineChange, LineOp, Range, Rgb, RowIdx, SheetChange, SheetId,
-    SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
+    DefinedName, FilterList, FilterView, HAlign, LineAxis, LineChange, LineOp, Range, Rgb, RowIdx,
+    SheetChange, SheetId, SheetInfo, SheetSizes, SheetVisibility, ShownValues, StyleChange, VAlign,
+    ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -176,6 +177,27 @@ pub trait Engine: Send {
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
     fn move_sheet(&mut self, sheet: SheetId, to: u32) -> Result<(), EngineError>;
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError>;
+    fn auto_filter(&self, sheet: SheetId) -> Option<FilterView>;
+    fn toggle_auto_filter(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
+    fn filter_values(
+        &self,
+        sheet: SheetId,
+        col: ColIdx,
+        search: &str,
+    ) -> Result<FilterList, EngineError>;
+    fn set_column_filter(
+        &mut self,
+        sheet: SheetId,
+        col: ColIdx,
+        shown: Option<ShownValues>,
+    ) -> Result<(), EngineError>;
+    fn clear_filters(&mut self, sheet: SheetId) -> Result<(), EngineError>;
+    fn sort_filter(
+        &mut self,
+        sheet: SheetId,
+        col: ColIdx,
+        descending: bool,
+    ) -> Result<(), EngineError>;
 }
 
 pub struct Workbook {
@@ -649,6 +671,66 @@ impl Workbook {
         })
     }
 
+    // The contents of `rows`, which lie in `range`, reordered by the `key` column with
+    // Excel's order: numbers, text (ignoring case), logicals, errors, and blanks always last;
+    // ties keep their order. Formulas are rewritten for the row they land on, as Excel's sort
+    // does; formats stay put. `None` when the rows are in order already.
+    pub(crate) fn sorted_rows(
+        &self,
+        sheet: SheetId,
+        range: Range,
+        rows: &[RowIdx],
+        key: ColIdx,
+        descending: bool,
+    ) -> Result<Option<Vec<Vec<String>>>, EngineError> {
+        if range.cell_count() > MAX_FILL_CELLS {
+            return Err(rejected(format!(
+                "sorting {} cells at once is not supported",
+                range.cell_count()
+            )));
+        }
+        // Excel refuses too: merged areas would stay put while their contents move.
+        if self
+            .merged(sheet)
+            .iter()
+            .any(|merge| merge.intersects(&range))
+        {
+            return Err(rejected(
+                "cells in the range are merged; unmerge them before sorting".to_string(),
+            ));
+        }
+        let keys: Vec<SortKey> = rows
+            .iter()
+            .map(|row| SortKey::of(&self.cell(sheet, CellPos::new(*row, key))))
+            .collect();
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_by(|a, b| SortKey::compare(&keys[*a], &keys[*b], descending));
+        if order.iter().enumerate().all(|(at, from)| at == *from) {
+            return Ok(None);
+        }
+        let model = self.model.get_model();
+        let moved = order
+            .iter()
+            .zip(rows)
+            .map(|(from, to)| {
+                (range.start.col.get()..=range.end.col.get())
+                    .map(|col| {
+                        model
+                            .extend_to(
+                                sheet.0,
+                                row_i32(rows[*from]),
+                                i32::from(col) + 1,
+                                row_i32(*to),
+                                i32::from(col) + 1,
+                            )
+                            .map_err(rejected)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(moved))
+    }
+
     pub fn new_empty() -> Result<Workbook, EngineError> {
         let model =
             UserModel::new_empty("Book1", LOCALE, timezone(), LANGUAGE).map_err(rejected)?;
@@ -1093,9 +1175,6 @@ impl Engine for Workbook {
         })
     }
 
-    // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
-    // (ignoring case), logicals, errors, and blanks always last; ties keep their order.
-    // Formulas are rewritten for their new row, as Excel's sort does; formats stay put.
     fn sort(
         &mut self,
         sheet: SheetId,
@@ -1103,60 +1182,18 @@ impl Engine for Workbook {
         key: ColIdx,
         descending: bool,
     ) -> Result<(), EngineError> {
-        if range.cell_count() > MAX_FILL_CELLS {
-            return Err(rejected(format!(
-                "sorting {} cells at once is not supported",
-                range.cell_count()
-            )));
-        }
-        // Excel refuses too: merged areas would stay put while their contents move.
-        if self
-            .merged(sheet)
-            .iter()
-            .any(|merge| merge.intersects(&range))
-        {
-            return Err(rejected(
-                "cells in the range are merged; unmerge them before sorting".to_string(),
-            ));
-        }
         let rows: Vec<RowIdx> = (range.start.row.get()..=range.end.row.get())
             .map(|row| RowIdx::clamped(i64::from(row)))
             .collect();
-        let keys: Vec<SortKey> = rows
-            .iter()
-            .map(|row| SortKey::of(&self.cell(sheet, CellPos::new(*row, key))))
-            .collect();
-        let mut order: Vec<usize> = (0..rows.len()).collect();
-        order.sort_by(|a, b| SortKey::compare(&keys[*a], &keys[*b], descending));
-        if order.iter().enumerate().all(|(at, from)| at == *from) {
+        let Some(moved) = self.sorted_rows(sheet, range, &rows, key, descending)? else {
             return Ok(());
-        }
-        let model = self.model.get_model();
-        let moved = order
-            .iter()
-            .zip(&rows)
-            .map(|(from, to)| {
-                (range.start.col.get()..=range.end.col.get())
-                    .map(|col| {
-                        model
-                            .extend_to(
-                                sheet.0,
-                                row_i32(rows[*from]),
-                                i32::from(col) + 1,
-                                row_i32(*to),
-                                i32::from(col) + 1,
-                            )
-                            .map_err(rejected)
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        };
         self.set_inputs(sheet, range.start, &moved)
             .inspect(|()| self.model.count_moved_edit())
     }
 
     // Ctrl+Enter: `text` typed at `from` goes into every cell of `range`, formulas
-    // shifted for each cell, in one undo step.
+    // shifted for each cell, in one undo step. As in Excel, rows a filter hides are skipped.
     fn fill_with(
         &mut self,
         sheet: SheetId,
@@ -1196,7 +1233,22 @@ impl Engine for Workbook {
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
-        self.set_inputs(sheet, range.start, &rows)
+        let skipped = self.skipped_rows(sheet, range)?;
+        if skipped.is_empty() {
+            return self.set_inputs(sheet, range.start, &rows);
+        }
+        let runs = crate::auto_filter::rows_around(range, &skipped);
+        self.as_one_undo_step(|book| {
+            runs.iter().try_for_each(|(first, last)| {
+                let offset = (first.get() - range.start.row.get()) as usize;
+                let count = (last.get() - first.get()) as usize + 1;
+                book.set_inputs(
+                    sheet,
+                    CellPos::new(*first, range.start.col),
+                    &rows[offset..offset + count],
+                )
+            })
+        })
     }
 
     // The fill handle: the cells of `target` past `source` (below it or to its right)
@@ -1390,19 +1442,18 @@ impl Engine for Workbook {
         let source_sheet: u32 = serde_json::from_value(field("sheet")?).map_err(parse)?;
         let source_range: (i32, i32, i32, i32) =
             serde_json::from_value(field("range")?).map_err(parse)?;
-        select(&mut self.model, sheet, Range::single(at))?;
         let (first_row, first_col, last_row, last_col) = source_range;
         let (height, width) = (
             i64::from(last_row) - i64::from(first_row),
             i64::from(last_col) - i64::from(first_col),
         );
-        self.log_content(
-            sheet,
-            Range::new(
-                at,
-                CellPos::new(at.row.offset(height), at.col.offset(width)),
-            ),
+        let target = Range::new(
+            at,
+            CellPos::new(at.row.offset(height), at.col.offset(width)),
         );
+        self.check_paste_rows(sheet, target)?;
+        select(&mut self.model, sheet, Range::single(at))?;
+        self.log_content(sheet, target);
         if cut {
             let corner = |row: i32, col: i32| {
                 CellPos::new(
@@ -1432,7 +1483,7 @@ impl Engine for Workbook {
 
     // Ctrl+D / Ctrl+R: the first row (or column) of the target is extended over the rest
     // with references shifted and its cells' formats copied whole, as in Excel; a single
-    // row (or column) extends the one above (or left).
+    // row (or column) extends the one above (or left). Rows a filter hides are skipped.
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
         let source_line = if down {
             if target.rows() == 1 {
@@ -1491,6 +1542,7 @@ impl Engine for Workbook {
                 })
                 .collect()
         };
+        let lines = crate::auto_filter::lines_around(lines, &self.skipped_rows(sheet, rest)?);
         let style_sources: Vec<(CellPos, Range)> = lines
             .iter()
             .filter_map(|(source, line)| source.map(|source| (source, *line)))
@@ -1572,10 +1624,13 @@ impl Engine for Workbook {
     // IronCalc visits every cell of an area it clears, so only the cells holding contents
     // are cleared, as rectangles of them: the work and the undo record follow the contents,
     // never the selection (a whole sheet has 17 billion cells), and gaps get no empty cells
-    // that would grow the used area. All rectangles go in one call, so one undo step.
+    // that would grow the used area. All rectangles go in one call, so one undo step. As
+    // in Excel, rows a filter hides keep their contents.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
         self.log_content(sheet, range);
-        let cells = self.content_cells_in(sheet, range)?;
+        let skipped = self.skipped_rows(sheet, range)?;
+        let mut cells = self.content_cells_in(sheet, range)?;
+        cells.retain(|cell| !skipped.contains(&cell.row.get()));
         if cells.is_empty() {
             return Ok(());
         }
@@ -2054,6 +2109,47 @@ impl Engine for Workbook {
         let plan = crate::save::full_plan(self.model.get_model(), &self.carried)?;
         let (xlsx, _) = crate::save::write_full(plan, Cursor::new(Vec::new()))?;
         Ok(xlsx.into_inner())
+    }
+
+    fn auto_filter(&self, sheet: SheetId) -> Option<FilterView> {
+        self.filter_view(sheet)
+    }
+
+    // On: `range` gets the buttons, its first row the header. Off: every row it hid shows.
+    fn toggle_auto_filter(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        self.toggle_filter(sheet, range)
+    }
+
+    fn filter_values(
+        &self,
+        sheet: SheetId,
+        col: ColIdx,
+        search: &str,
+    ) -> Result<FilterList, EngineError> {
+        self.filter_list(sheet, col, search)
+    }
+
+    // `None` removes the column's criteria.
+    fn set_column_filter(
+        &mut self,
+        sheet: SheetId,
+        col: ColIdx,
+        shown: Option<ShownValues>,
+    ) -> Result<(), EngineError> {
+        self.set_column_criteria(sheet, col, shown)
+    }
+
+    fn clear_filters(&mut self, sheet: SheetId) -> Result<(), EngineError> {
+        self.clear_criteria(sheet)
+    }
+
+    fn sort_filter(
+        &mut self,
+        sheet: SheetId,
+        col: ColIdx,
+        descending: bool,
+    ) -> Result<(), EngineError> {
+        self.sort_visible_rows(sheet, col, descending)
     }
 }
 

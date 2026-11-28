@@ -9,6 +9,7 @@ pub enum PaintFailure {
     WrappedText,
     HeaderLabel,
     EditorText,
+    FilterGlyph,
 }
 
 static CELL_TEXT: AtomicBool = AtomicBool::new(false);
@@ -16,6 +17,7 @@ static WRAPPED_SHAPE: AtomicBool = AtomicBool::new(false);
 static WRAPPED_TEXT: AtomicBool = AtomicBool::new(false);
 static HEADER_LABEL: AtomicBool = AtomicBool::new(false);
 static EDITOR_TEXT: AtomicBool = AtomicBool::new(false);
+static FILTER_GLYPH: AtomicBool = AtomicBool::new(false);
 
 impl PaintFailure {
     pub fn first_occurrence(self) -> bool {
@@ -25,6 +27,7 @@ impl PaintFailure {
             Self::WrappedText => &WRAPPED_TEXT,
             Self::HeaderLabel => &HEADER_LABEL,
             Self::EditorText => &EDITOR_TEXT,
+            Self::FilterGlyph => &FILTER_GLYPH,
         };
         !reported.swap(true, Ordering::Relaxed)
     }

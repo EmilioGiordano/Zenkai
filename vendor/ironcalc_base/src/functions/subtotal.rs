@@ -70,6 +70,14 @@ impl<'a> Model<'a> {
         if !hidden {
             return Ok(CellTableStatus::Normal);
         }
+        // A filter hides whole rows, so they are filtered out in every column.
+        if worksheet
+            .auto_filter
+            .as_ref()
+            .is_some_and(|filter| filter.is_filtered(row))
+        {
+            return Ok(CellTableStatus::Filtered);
+        }
         // The row is hidden we need to know if the table has filters
         if self.get_table_for_cell(sheet_index, row, column) {
             Ok(CellTableStatus::Filtered)

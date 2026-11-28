@@ -129,6 +129,136 @@ fn hidden_grid_lines_and_headers_round_trip() {
 }
 
 #[test]
+fn an_auto_filter_round_trips_with_the_rows_it_hides() {
+    use ironcalc_base::types::{
+        AutoFilter, FilterColumn, FilterCriteria, SortCondition, SortState,
+    };
+    let mut model = new_empty_model();
+    for row in 1..=5 {
+        model
+            .set_user_input(0, row, 1, format!("v<{row}>"))
+            .unwrap();
+    }
+    model.workbook.worksheets[0]
+        .set_row_hidden(3, true)
+        .unwrap();
+    model.workbook.worksheets[0]
+        .set_row_hidden(4, true)
+        .unwrap();
+    let filter = AutoFilter {
+        first_row: 1,
+        first_column: 1,
+        last_row: 5,
+        last_column: 3,
+        columns: vec![
+            FilterColumn {
+                column: 0,
+                criteria: FilterCriteria::Values {
+                    values: vec!["v<2>".to_string(), "v<5>".to_string(), "a\"b".to_string()],
+                    blank: true,
+                },
+                hidden_button: false,
+                show_button: true,
+            },
+            FilterColumn {
+                column: 2,
+                criteria: FilterCriteria::Kept(
+                    r#"<top10 top="0" val="2" filterVal="1"/>"#.to_string(),
+                ),
+                hidden_button: true,
+                show_button: false,
+            },
+        ],
+        filtered_rows: vec![3, 4],
+        sort_state: Some(SortState {
+            first_row: 2,
+            first_column: 1,
+            last_row: 5,
+            last_column: 3,
+            conditions: vec![SortCondition {
+                first_row: 2,
+                first_column: 1,
+                last_row: 5,
+                last_column: 1,
+                descending: true,
+                attributes: r#" sortBy="value""#.to_string(),
+            }],
+            attributes: r#" caseSensitive="1""#.to_string(),
+        }),
+    };
+    model.set_auto_filter(0, Some(filter.clone())).unwrap();
+    model.evaluate();
+    let temp_file_name = "temp_file_test_auto_filter.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    let sheet = model.workbook.worksheet(0).unwrap();
+    assert_eq!(sheet.auto_filter.as_ref(), Some(&filter));
+    assert!(sheet.is_row_hidden(3).unwrap());
+    assert!(!sheet.is_row_hidden(2).unwrap());
+    fs::remove_file(temp_file_name).unwrap();
+}
+
+#[test]
+fn a_filtered_sheet_gets_one_filter_database_name_that_follows_its_filter() {
+    use ironcalc_base::types::{AutoFilter, DefinedName};
+    let mut model = new_empty_model();
+    model.add_sheet("My Sheet").unwrap();
+    let sheet_ids: Vec<u32> = model
+        .workbook
+        .worksheets
+        .iter()
+        .map(|sheet| sheet.sheet_id)
+        .collect();
+    // A stale one, as a file may hold, and one of a sheet without a filter.
+    for (sheet_id, formula) in [
+        (sheet_ids[1], "'My Sheet'!$A$1:$A$2"),
+        (sheet_ids[0], "Sheet1!$C$1:$C$9"),
+    ] {
+        model.workbook.defined_names.push(DefinedName {
+            name: "_xlnm._FilterDatabase".to_string(),
+            formula: formula.to_string(),
+            sheet_id: Some(sheet_id),
+        });
+    }
+    let filter = AutoFilter {
+        first_row: 2,
+        first_column: 1,
+        last_row: 8,
+        last_column: 2,
+        columns: Vec::new(),
+        filtered_rows: Vec::new(),
+        sort_state: None,
+    };
+    model.set_auto_filter(1, Some(filter)).unwrap();
+    model.evaluate();
+    let temp_file_name = "temp_file_test_filter_database.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let file = fs::File::open(temp_file_name).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut book = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("xl/workbook.xml").unwrap(), &mut book)
+        .unwrap();
+    assert_eq!(book.matches("_xlnm._FilterDatabase").count(), 2, "{book}");
+    assert!(
+        book.contains(
+            r#"<definedName name="_xlnm._FilterDatabase" localSheetId="1" hidden="1">'My Sheet'!$A$2:$B$8</definedName>"#
+        ),
+        "{book}"
+    );
+    assert!(book.contains("Sheet1!$C$1:$C$9"), "{book}");
+
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    let names: Vec<(&str, Option<u32>)> = model
+        .workbook
+        .defined_names
+        .iter()
+        .map(|name| (name.name.as_str(), name.sheet_id))
+        .collect();
+    assert_eq!(names, [("_xlnm._FilterDatabase", Some(sheet_ids[0]))]);
+    fs::remove_file(temp_file_name).unwrap();
+}
+
+#[test]
 fn shown_grid_lines_and_headers_write_no_attribute() {
     let model = new_empty_model();
     let temp_file_name = "temp_file_test_shown_grid_lines_and_headers.xlsx";

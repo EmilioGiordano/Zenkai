@@ -1289,6 +1289,23 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
+    /// Gives the sheet an AutoFilter, or removes it with `None`. The rows it lists as
+    /// filtered are not hidden or shown here.
+    pub fn set_auto_filter(
+        &mut self,
+        sheet: u32,
+        auto_filter: Option<AutoFilter>,
+    ) -> Result<(), String> {
+        if auto_filter
+            .as_ref()
+            .is_some_and(|filter| !filter.is_valid())
+        {
+            return Err("Invalid AutoFilter".to_string());
+        }
+        self.workbook.worksheet_mut(sheet)?.auto_filter = auto_filter;
+        Ok(())
+    }
+
     /// Makes the row numbers and column letters of the sheet visible (`true`) or hidden (`false`)
     pub fn set_show_row_col_headers(
         &mut self,
@@ -1743,6 +1760,17 @@ impl<'a> Model<'a> {
         // Parsing every formula past this point can hang the machine on a file
         // bigger than its budget; the estimate above refuses first.
         let open_allowance = OpenAllowance::checked(&workbook, budget_bytes)?;
+        // A workbook decoded from bytes has not been through the xlsx import's checks.
+        if let Some(sheet) = workbook
+            .worksheets
+            .iter()
+            .find(|sheet| sheet.auto_filter.as_ref().is_some_and(|f| !f.is_valid()))
+        {
+            return Err(format!(
+                "Error parsing workbook: the AutoFilter of sheet '{}' lies outside it",
+                sheet.name
+            ));
+        }
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
 

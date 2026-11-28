@@ -351,13 +351,22 @@ fn kept_by_each_path(source: &Path, element: Option<&str>) {
     assert!(scan(&full.bytes).is_empty(), "{:?}", scan(&full.bytes));
 }
 
+// The filter lives in the model, so every save writes it, a whole one too.
 #[test]
-fn an_autofilter_is_kept_when_its_sheet_is_edited() {
+fn an_autofilter_is_written_by_every_save_path() {
     let dir = tempfile::tempdir().unwrap();
     let path = source(dir.path(), |held| {
         held.autofilter(0, 0, 2, 2).unwrap();
     });
-    kept_by_each_path(&path, Some("autoFilter"));
+    let original = std::fs::read(&path).unwrap();
+    assert!(scan(&original).is_empty(), "{:?}", scan(&original));
+    for edit in [Edit::OtherSheet, Edit::SameSheet, Edit::RenameSheet] {
+        let saved = saved_after(&path, edit);
+        assert!(saved.dropped.is_empty(), "{:?}", saved.dropped);
+        let sheet = held_sheet(&saved.bytes);
+        assert!(sheet.contains(r#"<autoFilter ref="A1:C3""#), "{sheet}");
+        open_xlsx(&saved.path).unwrap();
+    }
 }
 
 #[test]
@@ -574,13 +583,13 @@ fn an_external_link_is_dropped_only_by_a_full_save() {
 fn an_edit_elsewhere_that_changes_a_formula_keeps_the_formula_sheet_content() {
     let dir = tempfile::tempdir().unwrap();
     let path = source(dir.path(), |held| {
-        held.autofilter(0, 0, 2, 2).unwrap();
+        held.protect();
     });
     let original = std::fs::read(&path).unwrap();
     let saved = saved_after(&path, Edit::CrossSheetFormula);
     assert_ne!(part(&saved.bytes, HELD_PART), part(&original, HELD_PART));
     assert!(saved.dropped.is_empty(), "{:?}", saved.dropped);
-    assert_eq!(scan(&saved.bytes), [Unsupported::AutoFilter]);
+    assert_eq!(scan(&saved.bytes), [Unsupported::SheetProtection]);
     assert_eq!(saved.kept, scan(&saved.bytes));
 }
 
@@ -591,40 +600,30 @@ fn inserted_row(source: &Path, at: i64, name: &str) -> Saved {
     save(&book, &source.with_file_name(name))
 }
 
-// Zenkai cannot shift the range a filter names, as Excel would, so a row inserted through
-// it drops the filter; one inserted below it leaves the filter right.
+// A row inserted through the filter widens it and one above it moves it, as in Excel; one
+// inserted below it leaves it alone.
 #[test]
-fn inserting_rows_through_a_filter_drops_it_and_says_so() {
+fn inserting_rows_moves_the_filter_with_its_cells() {
     let dir = tempfile::tempdir().unwrap();
     let path = source(dir.path(), |held| {
         held.autofilter(0, 0, 2, 2).unwrap();
     });
     let original = std::fs::read(&path).unwrap();
-
-    let below = inserted_row(&path, 5, "below.xlsx");
-    assert!(below.dropped.is_empty(), "{:?}", below.dropped);
-    assert_eq!(below.kept, scan(&below.bytes));
-    assert!(
-        children(&held_sheet(&below.bytes))
-            .iter()
-            .any(|e| e == "autoFilter")
-    );
-    assert_sound(&below, &original);
-
-    let through = inserted_row(&path, 1, "through.xlsx");
-    assert_eq!(through.dropped, [Unsupported::AutoFilter]);
-    assert_eq!(through.kept, scan(&through.bytes));
-    assert!(
-        scan(&through.bytes).is_empty(),
-        "{:?}",
-        scan(&through.bytes)
-    );
-    assert!(
-        !children(&held_sheet(&through.bytes))
-            .iter()
-            .any(|e| e == "autoFilter")
-    );
-    open_xlsx(&through.path).unwrap();
+    for (at, name, range) in [
+        (5, "below.xlsx", "A1:C3"),
+        (1, "through.xlsx", "A1:C4"),
+        (0, "above.xlsx", "A2:C4"),
+    ] {
+        let saved = inserted_row(&path, at, name);
+        assert!(saved.dropped.is_empty(), "{:?}", saved.dropped);
+        assert_eq!(saved.kept, scan(&saved.bytes));
+        let sheet = held_sheet(&saved.bytes);
+        assert!(
+            sheet.contains(&format!(r#"<autoFilter ref="{range}""#)),
+            "{sheet}"
+        );
+        assert_sound(&saved, &original);
+    }
 }
 
 // Zenkai cannot shift where a link to another sheet points, as Excel would, so a row
@@ -747,7 +746,7 @@ fn a_patch_save_after_a_whole_save_brings_nothing_back() {
     let sheet = held_sheet(&patched.bytes);
     assert!(referenced_ids(&sheet).is_empty(), "{sheet}");
     assert!(
-        !children(&sheet).iter().any(|e| e == "autoFilter"),
+        children(&sheet).iter().any(|e| e == "autoFilter"),
         "{sheet}"
     );
     open_xlsx(&patched.path).unwrap();
@@ -847,7 +846,7 @@ fn foreign_attributes_on_a_kept_element_are_left_out() {
     assert_sound(&same, &original);
 }
 
-// The file that warned about pivot tables, a chart and a filter: saving in place after
+// The file that warned about pivot tables and a chart: saving in place after
 // edits drops nothing the edited sheets can keep, and nothing a second time.
 #[test]
 fn saving_in_place_names_each_loss_once() {
@@ -881,7 +880,6 @@ fn saving_in_place_names_each_loss_once() {
         Unsupported::Charts,
         Unsupported::Images,
         Unsupported::PivotTables,
-        Unsupported::AutoFilter,
     ];
     assert_eq!(set(&scan(&std::fs::read(&path).unwrap())), set(&all));
 
@@ -898,7 +896,7 @@ fn saving_in_place_names_each_loss_once() {
     assert_eq!(data.kept, scan(&data.bytes));
 
     // The chart names the moved cells, and what the other sheets' relationships point at
-    // is never read, so every sheet's relationships go with the filter.
+    // is never read, so every sheet's relationships go.
     book.insert_rows(SheetId(0), RowIdx::clamped(0), 1).unwrap();
     let moved = save(&book, &path);
     assert_eq!(set(&moved.dropped), set(&all));

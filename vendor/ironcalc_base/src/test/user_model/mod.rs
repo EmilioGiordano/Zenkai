@@ -1,5 +1,6 @@
 mod test_add_delete_sheets;
 mod test_array_formulas;
+mod test_auto_filter;
 mod test_autofill_columns;
 mod test_autofill_rows;
 mod test_batch_row_column_diff;
@@ -19,6 +20,7 @@ mod test_evaluation;
 mod test_extend_copied_value;
 mod test_fill_formula;
 mod test_fill_style;
+mod test_filtered_subtotal;
 mod test_fn_formulatext;
 mod test_general;
 mod test_grid_lines;

@@ -94,6 +94,8 @@ pub(crate) fn fill(
         }
         worksheet.sheet_data = data;
         worksheet.rows = cells.rows;
+        // IronCalc's importer counted the filter's hidden rows before the rows were here.
+        worksheet.mark_filtered_rows();
         worksheet.shared_formulas = shared_formulas;
     }
     workbook
