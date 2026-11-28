@@ -657,9 +657,9 @@ pub fn function_names() -> impl Iterator<Item = &'static str> {
 /// The arguments of `name`, as Excel's tooltip shows them between the parentheses.
 pub fn arguments(name: &str) -> Option<&'static str> {
     FUNCTIONS
-        .iter()
-        .find(|(function, _)| *function == name)
-        .map(|(_, arguments)| *arguments)
+        .binary_search_by(|(function, _)| function.cmp(&name))
+        .ok()
+        .map(|at| FUNCTIONS[at].1)
 }
 
 #[cfg(test)]
