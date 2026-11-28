@@ -6,7 +6,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use rust_xlsxwriter::Workbook as Source;
-use zenkai_engine::{Engine, Workbook, XlsxReader, open_xlsx_with};
+use zenkai_engine::{Engine, SaveTarget, Workbook, XlsxReader, open_xlsx_with, save_xlsx};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const FIRST: SheetId = SheetId(0);
@@ -24,9 +24,7 @@ fn source(path: &Path) {
     book.save(path).unwrap();
 }
 
-// Excel writes showRowColHeaders="0" for View, Headings off; the schema's boolean also
-// allows "false".
-fn hide_headings_of_the_first_sheet(path: &Path, spelling: &str) {
+fn edit_first_sheet(path: &Path, edit: impl Fn(String) -> String) {
     let mut archive = zip::ZipArchive::new(Cursor::new(std::fs::read(path).unwrap())).unwrap();
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for index in 0..archive.len() {
@@ -35,11 +33,7 @@ fn hide_headings_of_the_first_sheet(path: &Path, spelling: &str) {
         let mut data = Vec::new();
         entry.read_to_end(&mut data).unwrap();
         if name == "xl/worksheets/sheet1.xml" {
-            let attribute = format!("<sheetView showRowColHeaders=\"{spelling}\" ");
-            data = String::from_utf8(data)
-                .unwrap()
-                .replacen("<sheetView ", &attribute, 1)
-                .into_bytes();
+            data = edit(String::from_utf8(data).unwrap()).into_bytes();
         }
         out.start_file(name, zip::write::FileOptions::default())
             .unwrap();
@@ -47,6 +41,60 @@ fn hide_headings_of_the_first_sheet(path: &Path, spelling: &str) {
     }
     std::fs::write(path, out.finish().unwrap().into_inner()).unwrap();
 }
+
+// Excel writes showRowColHeaders="0" for View, Headings off; the schema's boolean also
+// allows "false", and surrounding whitespace.
+fn hide_headings_of_the_first_sheet(path: &Path, spelling: &str) {
+    edit_first_sheet(path, |xml| {
+        let attribute = format!("<sheetView showRowColHeaders=\"{spelling}\" ");
+        xml.replacen("<sheetView ", &attribute, 1)
+    });
+}
+
+// A workbook saved with several windows has a sheetView for each.
+fn give_the_first_sheet_views(path: &Path, views: &str) {
+    edit_first_sheet(path, |xml| {
+        let start = xml.find("<sheetViews>").unwrap();
+        let end = xml.find("</sheetViews>").unwrap() + "</sheetViews>".len();
+        format!(
+            "{}<sheetViews>{views}</sheetViews>{}",
+            &xml[..start],
+            &xml[end..]
+        )
+    });
+}
+
+// The attributes of each sheetView of the first sheet, by workbookViewId.
+fn views_of_the_first_sheet(xlsx: &[u8]) -> Vec<(String, Vec<(String, String)>)> {
+    let xml = part(xlsx, "xl/worksheets/sheet1.xml");
+    let document = roxmltree::Document::parse(&xml).unwrap();
+    let mut views: Vec<_> = document
+        .descendants()
+        .filter(|node| node.has_tag_name("sheetView"))
+        .map(|node| {
+            let mut attributes: Vec<(String, String)> = node
+                .attributes()
+                .filter(|attribute| attribute.name() != "tabSelected")
+                .map(|attribute| (attribute.name().to_string(), attribute.value().to_string()))
+                .collect();
+            attributes.sort();
+            let id = node.attribute("workbookViewId").unwrap().to_string();
+            (id, attributes)
+        })
+        .collect();
+    views.sort();
+    views
+}
+
+fn attribute_of<'a>(attributes: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    attributes
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.as_str())
+}
+
+const TWO_VIEWS: &str = r#"<sheetView showGridLines="0" showRowColHeaders="0" tabSelected="1" workbookViewId="0"/><sheetView showRowColHeaders="1" workbookViewId="1"/>"#;
+const TWO_VIEWS_REVERSED: &str = r#"<sheetView showGridLines="1" workbookViewId="1"/><sheetView showGridLines="0" showRowColHeaders="0" tabSelected="1" workbookViewId="0"/>"#;
 
 fn part(xlsx: &[u8], name: &str) -> String {
     let mut archive = zip::ZipArchive::new(Cursor::new(xlsx)).unwrap();
@@ -91,7 +139,7 @@ fn a_file_that_says_nothing_shows_headings() {
 
 #[test]
 fn a_file_with_headings_off_opens_without_headings() {
-    for spelling in ["0", "false"] {
+    for spelling in ["0", "false", " 0 ", " false "] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("report.xlsx");
         source(&path);
@@ -228,4 +276,58 @@ fn a_workbook_that_was_never_toggled_reads_as_shown() {
     assert!(book.headings_shown(FIRST));
     assert!(book.gridlines_shown(SheetId(9)));
     assert!(book.headings_shown(SheetId(9)));
+}
+
+#[test]
+fn a_sheet_saved_with_several_windows_reads_the_flags_of_the_first_window() {
+    for views in [TWO_VIEWS, TWO_VIEWS_REVERSED] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.xlsx");
+        source(&path);
+        give_the_first_sheet_views(&path, views);
+        for reader in READERS {
+            let book = open(&path, reader);
+            assert!(!book.gridlines_shown(FIRST), "{views}");
+            assert!(!book.headings_shown(FIRST), "{views}");
+            assert!(book.gridlines_shown(SECOND) && book.headings_shown(SECOND));
+        }
+    }
+}
+
+#[test]
+fn a_full_save_keeps_the_flags_of_a_sheet_that_had_several_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("report.xlsx");
+    source(&path);
+    give_the_first_sheet_views(&path, TWO_VIEWS);
+    for reader in READERS {
+        let saved = open(&path, reader).to_xlsx().unwrap();
+        let views = views_of_the_first_sheet(&saved);
+        let (_, first) = views.iter().find(|(id, _)| id == "0").unwrap();
+        assert_eq!(attribute_of(first, "showGridLines"), Some("0"));
+        assert_eq!(attribute_of(first, "showRowColHeaders"), Some("0"));
+        let saved_path = dir.path().join("saved.xlsx");
+        std::fs::write(&saved_path, &saved).unwrap();
+        let reopened = open(&saved_path, reader);
+        assert!(!reopened.gridlines_shown(FIRST));
+        assert!(!reopened.headings_shown(FIRST));
+    }
+}
+
+#[test]
+fn saving_over_the_file_without_edits_keeps_every_window_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("report.xlsx");
+    source(&path);
+    give_the_first_sheet_views(&path, TWO_VIEWS);
+    let before = views_of_the_first_sheet(&std::fs::read(&path).unwrap());
+    assert_eq!(before.len(), 2);
+    for reader in READERS {
+        let book = open(&path, reader);
+        save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+        assert_eq!(
+            views_of_the_first_sheet(&std::fs::read(&path).unwrap()),
+            before
+        );
+    }
 }
