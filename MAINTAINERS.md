@@ -86,7 +86,8 @@ user with any of these red.
 Branches are developed in parallel, one agent and one worktree each, and validated together
 in a staging branch.
 
-1. **Design.** The rule is in `AGENTS.md` (Process); the maintainer approves the design artifact.
+1. **Design.** The rule is in `AGENTS.md` (Process). `ui-designer` draws the mockup in
+   `docs/design/<topic>/`, `ux-reviewer` reviews it, and the maintainer approves it.
 2. **Branch.** The implementer works per the code rules and validates statically per
    Validation above, without building. It commits in logical commits and never pushes.
    When the branch is ready for review, the lead pushes it and opens a draft PR with
@@ -132,13 +133,17 @@ After two failed review rounds on a branch, stop and ask the user instead of ite
 - `.claude/agents/perf-auditor.md`: static performance review on branches, benchmark in
   staging, read-only on code.
 - `.claude/agents/test-engineer.md`: writes and runs tests.
+- `.claude/agents/ui-designer.md`: mockups and behaviour note for a UI task, before it is
+  built. Never writes code.
+- `.claude/agents/ux-reviewer.md`: strict UX review of mockups and of built UI against them,
+  read-only.
 - `.claude/agents/frontend-implementer.md`: implements UI in GPUI.
 - `.claude/agents/engine-implementer.md`: implements engine work (Opus).
 - `.claude/agents/implementer.md`: implements everything else: agent and MCP crates, CI.
 - `.claude/agents/staging-integrator.md`: merges ready branches into `staging/<date>`, runs
   the full gate once and delivers the test exe.
 
-Models: implementers and reviewers run on Sonnet, perf-auditor on Haiku, engine work on Opus.
+Models: implementers, the designer and reviewers run on Sonnet, perf-auditor on Haiku, engine work on Opus.
 Never delegate to the built-in general-purpose agent for implementation; it runs on the
 session's model.
 - `.claude/skills/review-changes/SKILL.md`: runs the reviewers in parallel and combines

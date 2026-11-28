@@ -29,9 +29,10 @@ argument, they review the current directory.
    which one it used. A branch that carries commits and also has uncommitted work is
    reviewed as the union of both.
 
-2. Decide whether performance review applies: run `git diff main --name-only` in the
+2. Decide whether performance and UX review apply: run `git diff main --name-only` in the
    target. If any changed path is under `crates/engine`, `crates/grid`, `crates/formats`
    or `bench/`, include `perf-auditor`.
+   If any is under `crates/app`, `crates/grid` or `docs/design`, include `ux-reviewer`.
 
 3. Launch the agents in a single message so they run in parallel. The agents receive
    only the target directory, the spec and `AGENTS.md`: the prompt carries no
@@ -39,6 +40,7 @@ argument, they review the current directory.
    - `Agent({ subagent_type: 'quality-reviewer', description: 'Quality review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - `Agent({ subagent_type: 'security-reviewer', description: 'Security review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - Only if step 2 applies: `Agent({ subagent_type: 'perf-auditor', description: 'Performance audit', prompt: 'Audit <target directory> per your instructions and return the required report.' })`
+   - Only if step 2 names it: `Agent({ subagent_type: 'ux-reviewer', description: 'UX review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - Only if the change touches `crates/engine`, `vendor/`, file reading or writing, or the
      agent security boundary (`crates/agent`, `crates/mcp-relay`, settings): a second
      opinion from a model family other than the implementer's, run read-only from the
