@@ -33,20 +33,8 @@ pub fn detect_date_order(rows: &[Vec<String>]) -> Option<DateOrder> {
     found
 }
 
-/// Rewrites every valid day-first date to ISO; returns how many fields changed.
-pub fn normalize_day_first(rows: &mut [Vec<String>]) -> usize {
-    let mut changed = 0;
-    for field in rows.iter_mut().flatten() {
-        if let Some(rewritten) = day_first_field(field) {
-            *field = rewritten;
-            changed += 1;
-        }
-    }
-    changed
-}
-
-// What `normalize_day_first` makes of one field, so a save can tell what the import turned a
-// field of the file into.
+// What the import makes of a day-first date, so a save can tell what it turned a field of the
+// file into.
 pub fn day_first_field(field: &str) -> Option<String> {
     let (day, month, year) = parts(field)?;
     valid(day, month, year).then(|| format!("{year:04}-{month:02}-{day:02}"))
@@ -191,7 +179,12 @@ mod tests {
             "12,5",
             "Total",
         ]);
-        assert_eq!(normalize_day_first(&mut data), 4);
+        crate::csv_guess::apply(
+            crate::csv_guess::DecimalMark::Dot,
+            DateOrder::DayFirst,
+            &crate::csv_text::TextColumns::default(),
+            &mut data,
+        );
         assert_eq!(
             data[0],
             [
@@ -260,9 +253,13 @@ mod no_panic {
 
         #[test]
         fn date_rewrite_accepts_any_field(field in prop_oneof![any::<String>(), "[0-9/.-]{0,12}"]) {
-            let mut rows = vec![vec![field]];
+            let rows = vec![vec![field]];
             let _ = super::detect_date_order(&rows);
-            let _ = super::normalize_day_first(&mut rows);
+            let _ = crate::csv_guess::read_field(
+                crate::csv_guess::DecimalMark::Dot,
+                super::DateOrder::DayFirst,
+                &rows[0][0],
+            );
         }
     }
 }

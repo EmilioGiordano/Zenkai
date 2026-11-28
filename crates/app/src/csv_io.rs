@@ -612,7 +612,12 @@ mod tests {
     #[test]
     fn decimal_comma_fields_import_as_numbers() {
         let mut rows = vec![vec!["1.234,5".to_string(), "=A1*2".to_string()]];
-        zenkai_formats::normalize_decimal_comma(&mut rows);
+        apply(
+            DecimalMark::Comma,
+            zenkai_formats::DateOrder::MonthFirst,
+            &TextColumns::default(),
+            &mut rows,
+        );
         let workbook = workbook_from_rows(rows, &TextColumns::default()).unwrap();
         let doubled = number_at(&workbook, 1);
         assert_eq!(doubled, Some(2469.0));
@@ -621,7 +626,12 @@ mod tests {
     #[test]
     fn day_first_dates_import_as_the_right_day() {
         let mut rows = vec![vec!["08/10/2026".to_string(), "25/10/2026".to_string()]];
-        zenkai_formats::normalize_day_first(&mut rows);
+        apply(
+            DecimalMark::Dot,
+            zenkai_formats::DateOrder::DayFirst,
+            &TextColumns::default(),
+            &mut rows,
+        );
         let workbook = workbook_from_rows(rows, &TextColumns::default()).unwrap();
         let serial = |col| number_at(&workbook, col);
         // 8 October 2026 and 25 October 2026 as Excel serials.

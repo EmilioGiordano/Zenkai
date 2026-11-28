@@ -18,20 +18,8 @@ pub fn detect_decimal_comma(rows: &[Vec<String>]) -> bool {
     comma
 }
 
-/// Rewrites every decimal-comma number to the dot form; returns how many fields changed.
-pub fn normalize_decimal_comma(rows: &mut [Vec<String>]) -> usize {
-    let mut changed = 0;
-    for field in rows.iter_mut().flatten() {
-        if let Some(rewritten) = decimal_comma_field(field) {
-            *field = rewritten;
-            changed += 1;
-        }
-    }
-    changed
-}
-
-// What `normalize_decimal_comma` makes of one field, so a save can tell what the import
-// turned a field of the file into.
+// What the import makes of a decimal-comma number, so a save can tell what it turned a field of
+// the file into.
 pub fn decimal_comma_field(field: &str) -> Option<String> {
     matches!(
         shape(field),
@@ -254,7 +242,12 @@ mod tests {
             "a,b",
         ]);
         assert!(detect_decimal_comma(&data));
-        assert_eq!(normalize_decimal_comma(&mut data), 4);
+        crate::csv_guess::apply(
+            crate::csv_guess::DecimalMark::Comma,
+            crate::dates::DateOrder::MonthFirst,
+            &crate::csv_text::TextColumns::default(),
+            &mut data,
+        );
         assert_eq!(
             data[0],
             [
@@ -352,9 +345,13 @@ mod no_panic {
 
         #[test]
         fn number_rewrite_accepts_any_field(field in prop_oneof![any::<String>(), "[-+0-9.,%]{0,16}"]) {
-            let mut rows = vec![vec![field]];
+            let rows = vec![vec![field]];
             let _ = super::detect_decimal_comma(&rows);
-            let _ = super::normalize_decimal_comma(&mut rows);
+            let _ = crate::csv_guess::read_field(
+                crate::csv_guess::DecimalMark::Comma,
+                crate::dates::DateOrder::MonthFirst,
+                &rows[0][0],
+            );
         }
     }
 }
