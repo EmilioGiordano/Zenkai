@@ -100,6 +100,17 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   (`src/import/shared_strings.rs`, `src/import/worksheets.rs`). Stands on its own. Tests:
   `test_phonetic_runs_are_not_part_of_the_text` in `src/import/shared_strings.rs`,
   `test_phonetic_runs_are_not_part_of_inline_text` in `tests/test.rs`.
+- The xlsx import reads a sheet's `<autoFilter>` into `Worksheet::auto_filter`: its range,
+  each `<filterColumn>` with its value list (`<filters>`, with `blank`) or, for any other
+  rule (custom, dynamic, colour, top 10, icon), the rule's XML rebuilt as text and kept,
+  and its `<sortState>`. Capped in columns, values, sort conditions and kept bytes; a rule
+  in another namespace or holding another `<autoFilter>` is not kept, and `extLst` is
+  dropped. The rows a filter with criteria hides are counted as hidden by it. The export
+  writes the filter back right after `</sheetData>`, values escaped (`src/import/auto_filter.rs`,
+  `src/import/worksheets.rs`, `src/export/auto_filter.rs`, `src/export/worksheets.rs`).
+  Needs the AutoFilter model of the `ironcalc_base` patch. Tests: the module tests of
+  `src/import/auto_filter.rs` and `an_auto_filter_round_trips_with_the_rows_it_hides` in
+  `src/export/test/test_export.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -169,6 +180,20 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
   (`src/user_model/common.rs`, `src/user_model/undo_redo.rs`). Needs the incremental
   recalculation: it records the row's cells as edited.
+- A sheet's AutoFilter in the model (`Worksheet::auto_filter`: range, per-column criteria,
+  sort state, and the rows it hides listed apart from rows hidden by hand), set through
+  `UserModel::set_auto_filter` as one undoable diff, with `set_scattered_rows_hidden` hiding
+  or showing any set of rows as one diff that stores only the rows it flips. Inserting or
+  deleting rows and columns moves the filter, its hidden rows and its sort, in a diff of its
+  own after the move's so undo and redo restore it exactly; deleting a sheet and undoing
+  brings its filter back (`src/auto_filter.rs`, `src/types.rs`, `src/model.rs`,
+  `src/user_model/common.rs`, `src/user_model/history.rs`, `src/user_model/undo_redo.rs`).
+  `MoveRows` and `MoveColumns` do not move it yet. Needs the incremental recalculation and
+  the hidden rows patch above: both diffs record the rows whose cells SUBTOTAL must read
+  again (`src/user_model/recalculation.rs`). Tests: `src/test/user_model/test_auto_filter.rs`.
+- SUBTOTAL 1 to 11 leave out rows an AutoFilter hides, as Excel does, while still counting
+  rows hidden by hand (`src/functions/subtotal.rs`). Needs the AutoFilter model above. Test:
+  `src/test/user_model/test_filtered_subtotal.rs`.
 - Text criteria as in Excel: `<=` and `>=` compared the wrong way round, and `<>text`
   skipped non-text cells (`src/functions/util.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
