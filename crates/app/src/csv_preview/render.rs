@@ -9,7 +9,7 @@ use zenkai_formats::{DateOrder, DecimalMark, Delimiter};
 use zenkai_i18n::t;
 
 use super::columns::Format;
-use super::controls::{DISABLED_OPACITY, checkbox_box, focus_ring, labelled};
+use super::controls::{DISABLED_OPACITY, RING_REACH, checkbox_box, focus_ring, labelled};
 use super::words;
 use super::{
     CANCEL_STOP, CsvPreview, DATE_STOPS, DECIMAL_STOPS, OPEN_STOP, SEPARATOR_STOPS,
@@ -27,9 +27,20 @@ const DELIMITERS: [Delimiter; 4] = [
 const TITLE_HEIGHT: f32 = 28.0;
 const ROW_HEIGHT: f32 = 30.0;
 const FOOTER_HEIGHT: f32 = 34.0;
+// Under the height of the row, so the ring of a choice has room inside the section.
+const CHOICE_HEIGHT: f32 = 28.0;
 // The section clips what is drawn past its edge, and a focus ring reaches 5px past a stop: the
 // section is that much larger on every side, and its content stays where it was.
 const RING_ROOM: f32 = 6.0;
+
+// A button of the dialog as a stop: where it is among them, what a screen reader calls it, whether
+// it is a choice that is on or off, and whether it can be used now.
+struct Stop {
+    index: usize,
+    name: &'static str,
+    chosen: Option<bool>,
+    enabled: bool,
+}
 
 type Activation = Rc<dyn Fn(&mut CsvPreview, &mut Window, &mut Context<CsvPreview>)>;
 
@@ -149,10 +160,34 @@ impl CsvPreview {
             .position(|block| block.contains_focused(window, cx));
         if focused != self.shown_block {
             if let Some(block) = focused {
-                self.section_scroll.scroll_to_item(block);
+                self.reveal_block(block);
             }
             self.shown_block = focused;
         }
+    }
+
+    // Moves the section the least that shows the block with the ring of its stops, which reach
+    // past it; a block taller than the section shows from its top.
+    fn reveal_block(&self, index: usize) {
+        let Some(block) = self.section_scroll.bounds_for_item(index) else {
+            return;
+        };
+        let view = self.section_scroll.bounds();
+        let block_top = f32::from(block.origin.y) - RING_REACH;
+        let block_bottom = f32::from(block.origin.y + block.size.height) + RING_REACH;
+        let view_top = f32::from(view.origin.y);
+        let view_bottom = view_top + f32::from(view.size.height);
+        let shift = if block_top < view_top {
+            view_top - block_top
+        } else if block_bottom > view_bottom {
+            view_bottom - block_bottom
+        } else {
+            return;
+        };
+        let offset = self.section_scroll.offset();
+        let furthest = -f32::from(self.section_scroll.max_offset().y);
+        let target = (f32::from(offset.y) + shift).clamp(furthest, 0.0);
+        self.section_scroll.set_offset(point(offset.x, px(target)));
     }
 
     fn block(&self, index: usize, content: AnyElement) -> impl IntoElement {
@@ -180,13 +215,18 @@ impl CsvPreview {
     // is a wrapper that keeps the focus and answers Enter and Space; the button answers clicks.
     fn stop_button(
         &self,
-        stop: usize,
         button: Button,
-        enabled: bool,
+        stop: Stop,
         activate: Activation,
         window: &Window,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
+        let Stop {
+            index: stop,
+            name,
+            chosen,
+            enabled,
+        } = stop;
         let focused = enabled && self.button_stops[stop].is_focused(window);
         let by_click = activate.clone();
         div()
@@ -195,12 +235,21 @@ impl CsvPreview {
             .flex_none()
             .when(enabled, |wrapper| {
                 wrapper
+                    .role(Role::Button)
+                    .aria_label(name)
                     .track_focus(&self.button_stops[stop])
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         if event.is_keyboard() {
                             activate(this, window, cx);
                         }
                     }))
+            })
+            .when_some(chosen.filter(|_| enabled), |wrapper, chosen| {
+                wrapper.aria_toggled(if chosen {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
             })
             .child(
                 button
@@ -230,8 +279,15 @@ impl CsvPreview {
                 .ghost()
                 .compact()
                 .label(text)
+                .h(rem_px(CHOICE_HEIGHT))
                 .selected(selected);
-            self.stop_button(stop, button, enabled, activate, window, cx)
+            let stop = Stop {
+                index: stop,
+                name: label,
+                chosen: Some(selected),
+                enabled,
+            };
+            self.stop_button(button, stop, activate, window, cx)
         };
         let group = |name: &'static str, enabled: bool, buttons: Vec<Stateful<Div>>| {
             h_flex()
@@ -389,17 +445,25 @@ impl CsvPreview {
                     .child(words::footer_hint(self.keep_all, self.has_columns())),
             )
             .child(div().key_context("CsvControl").child(self.stop_button(
-                CANCEL_STOP,
                 cancel,
-                true,
+                Stop {
+                    index: CANCEL_STOP,
+                    name: t!("button.cancel"),
+                    chosen: None,
+                    enabled: true,
+                },
                 activation(|_, window, cx| window.dispatch_action(Box::new(CancelCsvImport), cx)),
                 window,
                 cx,
             )))
             .child(div().key_context("CsvControl").child(self.stop_button(
-                OPEN_STOP,
                 open,
-                true,
+                Stop {
+                    index: OPEN_STOP,
+                    name: t!("csv.import"),
+                    chosen: None,
+                    enabled: true,
+                },
                 activation(|_, window, cx| window.dispatch_action(Box::new(ConfirmCsvImport), cx)),
                 window,
                 cx,

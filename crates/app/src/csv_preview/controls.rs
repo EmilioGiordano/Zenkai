@@ -36,16 +36,28 @@ pub fn mnemonic<'a>(label: &'a str, key: &str) -> Mnemonic<'a> {
     }
 }
 
+// A label that has no letter for its Alt key shows the key after it, as Windows does for a key
+// the text does not hold; where there is no Alt key, it shows nothing of it.
 pub fn labelled(label: &str, key: &str, underlined: bool) -> Div {
     let parts = mnemonic(label, key);
-    h_flex()
-        .whitespace_nowrap()
-        .child(parts.before.to_string())
-        .child(
-            div()
-                .when(underlined, |letter| letter.underline())
-                .child(parts.letter.to_string()),
-        )
+    let underline = |letter: Div| letter.when(underlined, |letter| letter.underline());
+    let line = h_flex().whitespace_nowrap();
+    if parts.letter.is_empty() {
+        let named = cfg!(not(target_os = "macos")) && !key.is_empty();
+        return line
+            .gap(px(4.0))
+            .child(label.to_string())
+            .when(named, |line| {
+                line.child(
+                    h_flex()
+                        .child("(")
+                        .child(underline(div()).child(key.to_string()))
+                        .child(")"),
+                )
+            });
+    }
+    line.child(parts.before.to_string())
+        .child(underline(div()).child(parts.letter.to_string()))
         .child(parts.after.to_string())
 }
 
@@ -54,10 +66,10 @@ pub fn labelled(label: &str, key: &str, underlined: bool) -> Div {
 pub fn focus_ring(theme: &Theme) -> Div {
     div()
         .absolute()
-        .top(px(-5.0))
-        .left(px(-5.0))
-        .right(px(-5.0))
-        .bottom(px(-5.0))
+        .top(px(-RING_REACH))
+        .left(px(-RING_REACH))
+        .right(px(-RING_REACH))
+        .bottom(px(-RING_REACH))
         .rounded(px(6.0))
         .border_1()
         .border_color(theme.foreground)
@@ -75,6 +87,8 @@ pub fn focus_ring(theme: &Theme) -> Div {
 }
 
 pub const DISABLED_OPACITY: f32 = 0.55;
+// How far past its stop the focus ring is drawn.
+pub const RING_REACH: f32 = 5.0;
 const BOX: f32 = 16.0;
 
 pub fn checkbox_box(checked: bool, theme: &Theme) -> Div {
