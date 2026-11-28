@@ -516,6 +516,7 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `Error parsing workbook: ` prefix, since bitcode replaces its reason with `bitcode error`
   without debug assertions, so the test failed under `cargo test --release`. Stands on its own.
 - Date and time formats accept fractional seconds (`.0`, `.00`, `.000`) after a seconds token, rounding the serial to that precision with carry and using the locale decimal separator (`src/formatter/parser.rs`, `src/formatter/format.rs`; tests in `src/formatter/test/test_time.rs`). Stands on its own.
+- `implemented_function_names` lists the English name of every function the model evaluates, leaving out the FORECAST.ETS family that only returns `#N/IMPL!`, so a caller can offer them without keeping its own list (`src/functions/mod.rs`, `src/lib.rs`). Stands on its own. Test: `implemented_function_names_resolve_and_leave_out_the_stubs` in `src/functions/mod.rs`.
 
 Zenkai-only, not for upstream:
 

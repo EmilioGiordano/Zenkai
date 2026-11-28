@@ -2295,6 +2295,24 @@ impl Function {
     }
 }
 
+/// English names of the functions the model evaluates. The FORECAST.ETS family is
+/// recognized but always returns #N/IMPL!, so it is left out.
+pub fn implemented_function_names() -> Vec<String> {
+    let language = get_default_language();
+    Function::into_iter()
+        .filter(|function| {
+            !matches!(
+                function,
+                Function::ForecastEts
+                    | Function::ForecastEtsConfint
+                    | Function::ForecastEtsSeasonality
+                    | Function::ForecastEtsStat
+            )
+        })
+        .map(|function| function.to_localized_name(language))
+        .collect()
+}
+
 impl<'a> Model<'a> {
     pub(crate) fn evaluate_function(
         &mut self,
@@ -2808,6 +2826,21 @@ mod tests {
         fs::File,
         io::{BufRead, BufReader},
     };
+
+    use super::implemented_function_names;
+    use crate::language::get_default_language;
+
+    #[test]
+    fn implemented_function_names_resolve_and_leave_out_the_stubs() {
+        let names = implemented_function_names();
+        let functions = &get_default_language().functions;
+        for name in &names {
+            assert!(functions.lookup(name).is_some(), "{name} does not resolve");
+        }
+        assert!(names.iter().any(|name| name == "TEXTBEFORE"));
+        assert!(names.iter().any(|name| name == "STDEV.S"));
+        assert!(!names.iter().any(|name| name.starts_with("FORECAST.ETS")));
+    }
 
     #[test]
     fn function_iterator() {

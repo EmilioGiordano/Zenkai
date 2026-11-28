@@ -80,6 +80,7 @@ mod test;
 #[cfg(any(test, feature = "mock_time"))]
 pub mod mock_time;
 
+pub use functions::implemented_function_names;
 pub use incremental::Recalculation;
 pub use locale::get_supported_locales;
 pub use model::get_milliseconds_since_epoch;
