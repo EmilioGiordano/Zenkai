@@ -22,6 +22,7 @@ mod test_fill_style;
 mod test_fn_formulatext;
 mod test_general;
 mod test_grid_lines;
+mod test_row_col_headers;
 mod test_hidden_columns;
 mod test_keyboard_navigation;
 mod test_language_switch;

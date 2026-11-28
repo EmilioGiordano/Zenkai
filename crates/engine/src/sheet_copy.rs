@@ -28,6 +28,7 @@ pub(crate) fn copied_sheet(
         frozen_columns,
         views,
         show_grid_lines,
+        show_row_col_headers,
         conditional_formatting,
     } = sheet;
     let copy_rows = |sheet_data: &CellStore, rows: &[i32]| {
@@ -65,6 +66,7 @@ pub(crate) fn copied_sheet(
         frozen_columns: *frozen_columns,
         views: views.clone(),
         show_grid_lines: *show_grid_lines,
+        show_row_col_headers: *show_row_col_headers,
         conditional_formatting: conditional_formatting.clone(),
     };
     Ok((copied, formulas))

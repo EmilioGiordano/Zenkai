@@ -1289,6 +1289,17 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
+    /// Makes the row numbers and column letters of the sheet visible (`true`) or hidden (`false`)
+    pub fn set_show_row_col_headers(
+        &mut self,
+        sheet: u32,
+        show_row_col_headers: bool,
+    ) -> Result<(), String> {
+        let worksheet = self.workbook.worksheet_mut(sheet)?;
+        worksheet.show_row_col_headers = show_row_col_headers;
+        Ok(())
+    }
+
     // Returns the 'single' value of a cell. Not arrays or ranges.
     pub(crate) fn get_cell_value(
         &self,

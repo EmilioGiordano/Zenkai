@@ -49,11 +49,10 @@ const OUTLINE_PROPERTIES: &[(&str, Value)] = &[
 ];
 const PAGE_SETUP_PROPERTIES: &[(&str, Value)] =
     &[("autoPageBreaks", Value::Bool), ("fitToPage", Value::Bool)];
-// IronCalc writes workbookViewId, tabSelected and showGridLines itself; repeating one
-// would make the element malformed.
+// IronCalc writes workbookViewId, tabSelected, showGridLines and showRowColHeaders itself;
+// repeating one would make the element malformed.
 const SHEET_VIEW: &[(&str, Value)] = &[
     ("showFormulas", Value::Bool),
-    ("showRowColHeaders", Value::Bool),
     ("showZeros", Value::Bool),
     ("rightToLeft", Value::Bool),
     ("showRuler", Value::Bool),

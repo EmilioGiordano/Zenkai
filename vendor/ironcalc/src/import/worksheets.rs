@@ -642,6 +642,7 @@ struct SheetView {
     frozen_rows: i32,
     range: [i32; 4],
     show_grid_lines: bool,
+    show_row_col_headers: bool,
 }
 
 impl Default for SheetView {
@@ -654,8 +655,14 @@ impl Default for SheetView {
             frozen_columns: 0,
             range: [1, 1, 1, 1],
             show_grid_lines: true,
+            show_row_col_headers: true,
         }
     }
+}
+
+// An absent attribute means shown; the schema's boolean also spells off as "false".
+fn shown(sheet_view: Node, attribute: &str) -> bool {
+    !matches!(sheet_view.attribute(attribute), Some("0" | "false"))
 }
 
 fn get_sheet_view(ws: Node) -> SheetView {
@@ -707,7 +714,8 @@ fn get_sheet_view(ws: Node) -> SheetView {
 
     let sheet_view = sheet_view[0];
     let is_selected = sheet_view.attribute("tabSelected").unwrap_or("0") == "1";
-    let show_grid_lines = sheet_view.attribute("showGridLines").unwrap_or("1") == "1";
+    let show_grid_lines = shown(sheet_view, "showGridLines");
+    let show_row_col_headers = shown(sheet_view, "showRowColHeaders");
 
     let pane = sheet_view
         .children()
@@ -755,6 +763,7 @@ fn get_sheet_view(ws: Node) -> SheetView {
             selected_column,
             is_selected,
             show_grid_lines,
+            show_row_col_headers,
             range: [row1, column1, row2, column2],
         }
     } else {
@@ -763,6 +772,7 @@ fn get_sheet_view(ws: Node) -> SheetView {
             frozen_columns,
             is_selected,
             show_grid_lines,
+            show_row_col_headers,
             ..Default::default()
         }
     }
@@ -1227,6 +1237,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
             frozen_rows: sheet_view.frozen_rows,
             frozen_columns: sheet_view.frozen_columns,
             show_grid_lines: sheet_view.show_grid_lines,
+            show_row_col_headers: sheet_view.show_row_col_headers,
             views,
             conditional_formatting,
         },

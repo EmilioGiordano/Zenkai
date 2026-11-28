@@ -204,6 +204,12 @@ pub fn write_worksheet_xml<W: Write>(
         ""
     };
 
+    let show_row_col_headers = if !worksheet.show_row_col_headers {
+        " showRowColHeaders=\"0\""
+    } else {
+        ""
+    };
+
     let mut active_cell = "A1".to_string();
     let mut sqref = "A1".to_string();
 
@@ -283,7 +289,7 @@ pub fn write_worksheet_xml<W: Write>(
 <worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\
   <dimension ref=\"{dimension}\"/>\
   <sheetViews>\
-    <sheetView workbookViewId=\"0\"{show_grid_lines}{tab_selected}>\
+    <sheetView workbookViewId=\"0\"{show_grid_lines}{show_row_col_headers}{tab_selected}>\
         {pane}\
     </sheetView>\
   </sheetViews>\
