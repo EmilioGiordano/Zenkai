@@ -404,7 +404,13 @@ pub fn table() -> Vec<Group> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Not `super::*`: with gpui_kit's glob, `#[test]` would resolve to gpui's own `test`
+    // macro, which expands to itself.
+    use gpui_kit::Action;
+    use zenkai_i18n::t;
+
+    use super::{Toggle, Toggles, table};
+    use crate::actions::{ToggleFormulaBar, ToggleFormulas, ToggleGridlines, ToggleHeadings};
 
     const SHOWN: Toggles = Toggles {
         gridlines: Some(true),
