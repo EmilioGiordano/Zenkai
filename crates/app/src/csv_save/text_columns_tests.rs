@@ -89,6 +89,24 @@ fn a_leading_zero_id_and_a_19_digit_id_open_as_shown_and_save_unchanged() {
 }
 
 #[test]
+fn the_columns_detection_flags_open_as_text_and_save_unchanged() {
+    let original = b"name,code,id\nAna,00123,9223372036854775807\nLuis,0045,1234567890123456789\n";
+    let rows = zenkai_formats::parse_csv(original, None).unwrap().rows;
+    let flagged = zenkai_formats::find_at_risk(&rows);
+    assert_eq!(
+        flagged.iter().map(|risk| risk.column).collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let text = TextColumns::chosen(flagged.iter().map(|risk| risk.column));
+    let dir = tempfile::tempdir().unwrap();
+    let (path, workbook, csv) = opened_with(dir.path(), original, text);
+    assert_text(&workbook, at(1, 1), "00123");
+    assert_text(&workbook, at(1, 2), "9223372036854775807");
+    assert_text(&workbook, at(2, 2), "1234567890123456789");
+    assert_eq!(saved(&path, workbook, &csv), original);
+}
+
+#[test]
 fn the_same_file_read_as_general_turns_the_ids_into_numbers() {
     let original = b"code,id\n00123,9223372036854775807\n";
     let dir = tempfile::tempdir().unwrap();
