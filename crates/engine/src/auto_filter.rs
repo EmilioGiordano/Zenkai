@@ -1,7 +1,5 @@
 // A sheet's AutoFilter lives in the model (`ironcalc::base::types::AutoFilter`), with the
-// rows it hides listed apart from rows hidden by hand. Every command here reads cells and
-// writes the filter and the rows' hidden flags as one undo step; none needs a GPUI context,
-// so the app runs them where it runs any other edit.
+// rows it hides listed apart from rows hidden by hand, which no filter command shows.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -119,7 +117,7 @@ fn shown(book: &Workbook, sheet: SheetId, row: i32, column: i32) -> Shown {
 }
 
 // The criteria of a filter's columns, ready to test rows against.
-enum Test {
+enum ColumnTest {
     Values {
         values: HashSet<String>,
         blank: bool,
@@ -128,12 +126,12 @@ enum Test {
     Kept,
 }
 
-struct Tests {
-    columns: Vec<(i32, Test)>,
+struct RowCriteria {
+    columns: Vec<(i32, ColumnTest)>,
 }
 
-impl Tests {
-    fn of(filter: &AutoFilter, skipped: Option<i32>) -> Tests {
+impl RowCriteria {
+    fn of(filter: &AutoFilter, skipped: Option<i32>) -> RowCriteria {
         let columns = filter
             .columns
             .iter()
@@ -141,23 +139,23 @@ impl Tests {
             .filter_map(|column| {
                 let test = match &column.criteria {
                     FilterCriteria::None => return None,
-                    FilterCriteria::Values { values, blank } => Test::Values {
+                    FilterCriteria::Values { values, blank } => ColumnTest::Values {
                         values: values.iter().map(|v| v.to_lowercase()).collect(),
                         blank: *blank,
                     },
-                    FilterCriteria::Kept(_) => Test::Kept,
+                    FilterCriteria::Kept(_) => ColumnTest::Kept,
                 };
                 Some((filter.first_column + column.column, test))
             })
             .collect();
-        Tests { columns }
+        RowCriteria { columns }
     }
 
     // `hidden_now` is whether the filter hides the row before this test.
     fn passes(&self, book: &Workbook, sheet: SheetId, row: i32, hidden_now: bool) -> bool {
         self.columns.iter().all(|(column, test)| match test {
-            Test::Kept => !hidden_now,
-            Test::Values { values, blank } => {
+            ColumnTest::Kept => !hidden_now,
+            ColumnTest::Values { values, blank } => {
                 let text = shown(book, sheet, row, *column).order.text;
                 if text.is_empty() {
                     *blank
@@ -229,7 +227,7 @@ impl Workbook {
     // leaving rows hidden by hand hidden, and lists the rows it hides in the filter.
     fn refilter(&mut self, sheet: SheetId, mut filter: AutoFilter) -> Result<(), EngineError> {
         let hidden = hidden_rows(self.model.get_model(), sheet)?;
-        let tests = Tests::of(&filter, None);
+        let tests = RowCriteria::of(&filter, None);
         let mut changes = Vec::new();
         let mut filtered_rows = Vec::new();
         for row in filter.data_rows() {
@@ -425,7 +423,7 @@ impl Workbook {
             });
         }
         let hidden = hidden_rows(self.model.get_model(), sheet)?;
-        let others = Tests::of(&filter, Some(offset));
+        let others = RowCriteria::of(&filter, Some(offset));
         let search = search.to_lowercase();
         let column = filter.first_column + offset;
         let mut items: BTreeMap<ItemOrder, (String, u32)> = BTreeMap::new();
@@ -486,7 +484,7 @@ impl Workbook {
                     count,
                 })
                 .collect(),
-            blanks: (blanks > 0 && search.is_empty()).then(|| FilterItem {
+            blanks: (blanks > 0 && search.is_empty()).then_some(FilterItem {
                 text: String::new(),
                 count: blanks,
                 shown: blank_shown,
