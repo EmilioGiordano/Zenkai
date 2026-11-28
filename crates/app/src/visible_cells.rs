@@ -60,6 +60,17 @@ impl CopyShape {
         }
     }
 
+    pub fn first_cell(&self) -> Option<CellPos> {
+        let (row, _) = self.rows.first()?;
+        let (col, _) = self.cols.first()?;
+        Some(CellPos::new(*row, *col))
+    }
+
+    // The number of rectangles `blocks` would build, known without building them.
+    pub fn block_count(&self) -> u64 {
+        self.rows.len() as u64 * self.cols.len() as u64
+    }
+
     pub fn cell_count(&self) -> u64 {
         u64::from(self.row_count()) * u64::from(self.col_count())
     }
@@ -116,22 +127,22 @@ impl CopyShape {
     }
 }
 
-// Select Visible Cells Only keeps the selection rectangle and marks it; any change of
-// selection, even to the same cells, drops the mark.
+// Select Visible Cells Only marks the current selection; the workspace clears the mark
+// whenever the selection changes, even to the same cells.
 #[derive(Debug, Default)]
-pub struct VisibleMark(Option<Range>);
+pub struct VisibleMark(bool);
 
 impl VisibleMark {
-    pub fn set(&mut self, selection: Range) {
-        self.0 = Some(selection);
+    pub fn set(&mut self) {
+        self.0 = true;
     }
 
     pub fn clear(&mut self) {
-        self.0 = None;
+        self.0 = false;
     }
 
-    pub fn copy_scope(&self, selection: Range) -> CopyScope {
-        if self.0 == Some(selection) {
+    pub fn copy_scope(&self) -> CopyScope {
+        if self.0 {
             CopyScope::VisibleOnly
         } else {
             CopyScope::Plain
@@ -140,29 +151,30 @@ impl VisibleMark {
 }
 
 #[cfg(test)]
+pub fn layout_hiding(rows: &[u32], cols: &[u16]) -> Layout {
+    use zenkai_types::{ColumnSpan, SheetSizes};
+    Layout::from_sizes(&SheetSizes {
+        columns: cols
+            .iter()
+            .map(|col| ColumnSpan {
+                first: ColIdx::clamped(i64::from(*col)),
+                last: ColIdx::clamped(i64::from(*col)),
+                width: 0.0,
+            })
+            .collect(),
+        rows: rows
+            .iter()
+            .map(|row| (RowIdx::clamped(i64::from(*row)), 0.0))
+            .collect(),
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_types::{ColumnSpan, SheetSizes};
 
     fn range(text: &str) -> Range {
         Range::parse_a1(text).unwrap()
-    }
-
-    fn layout_hiding(rows: &[u32], cols: &[u16]) -> Layout {
-        Layout::from_sizes(&SheetSizes {
-            columns: cols
-                .iter()
-                .map(|col| ColumnSpan {
-                    first: ColIdx::clamped(i64::from(*col)),
-                    last: ColIdx::clamped(i64::from(*col)),
-                    width: 0.0,
-                })
-                .collect(),
-            rows: rows
-                .iter()
-                .map(|row| (RowIdx::clamped(i64::from(*row)), 0.0))
-                .collect(),
-        })
     }
 
     fn row_numbers(shape: &CopyShape) -> Vec<u32> {
@@ -282,21 +294,33 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_covers_only_the_selection_it_was_set_on() {
+    fn a_marked_selection_copies_the_visible_cells_until_the_mark_clears() {
         let mut mark = VisibleMark::default();
-        let selection = range("A1:A10");
-        assert_eq!(mark.copy_scope(selection), CopyScope::Plain);
-        mark.set(selection);
-        assert_eq!(mark.copy_scope(selection), CopyScope::VisibleOnly);
-        assert_eq!(mark.copy_scope(range("A1:A9")), CopyScope::Plain);
+        assert_eq!(mark.copy_scope(), CopyScope::Plain);
+        mark.set();
+        assert_eq!(mark.copy_scope(), CopyScope::VisibleOnly);
+        mark.clear();
+        assert_eq!(mark.copy_scope(), CopyScope::Plain);
     }
 
     #[test]
-    fn a_selection_change_clears_the_mark_even_back_to_the_same_cells() {
-        let mut mark = VisibleMark::default();
-        let selection = range("A1:A10");
-        mark.set(selection);
-        mark.clear();
-        assert_eq!(mark.copy_scope(selection), CopyScope::Plain);
+    fn block_count_is_the_product_of_the_runs_without_building_blocks() {
+        let hidden_rows: Vec<u32> = (0..40_000).filter(|row| row % 2 == 1).collect();
+        let hidden_cols: Vec<u16> = (0..200).filter(|col| col % 2 == 1).collect();
+        let layout = layout_hiding(&hidden_rows, &hidden_cols);
+        let shape = CopyShape::of(range("A1:GR40000"), CopyScope::VisibleOnly, &layout);
+        assert_eq!(shape.block_count(), 20_000 * 100);
+        assert_eq!(shape.row_count(), 20_000);
+        assert_eq!(shape.col_count(), 100);
+    }
+
+    #[test]
+    fn the_first_cell_is_the_first_visible_one() {
+        let layout = layout_hiding(&[0, 1], &[0]);
+        let shape = CopyShape::of(range("A1:C5"), CopyScope::VisibleOnly, &layout);
+        assert_eq!(shape.first_cell(), CellPos::parse_a1("B3"));
+        let hidden = layout_hiding(&[0, 1, 2, 3, 4], &[]);
+        let shape = CopyShape::of(range("A1:C5"), CopyScope::VisibleOnly, &hidden);
+        assert_eq!(shape.first_cell(), None);
     }
 }
