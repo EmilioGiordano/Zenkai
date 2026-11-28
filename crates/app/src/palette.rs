@@ -480,6 +480,7 @@ mod tests {
         assert!(found(Toggle::Gridlines, "hide gridlines"));
         assert!(found(Toggle::Gridlines, "show gridlines"));
         assert!(found(Toggle::Headings, "hide row and column headings"));
+        assert!(found(Toggle::Headings, "show row and column headings"));
         assert!(found(Toggle::Headings, "column letters"));
         assert!(found(Toggle::Headings, "row numbers"));
         assert!(found(Toggle::FormulaBar, "hide formula bar"));
