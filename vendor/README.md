@@ -28,6 +28,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   formula (`<f t="shared" ref=".." si="..">` once, then `<f t="shared" si=".."/>`), so the
   formula is stringified once per run and the part is smaller (`src/export/worksheets.rs`).
   Tests: `src/export/test/test_export.rs`.
+- The xlsx export writes an `@` in an array or dynamic array formula as `_xlfn.SINGLE`
+  instead of dropping it where a plain formula's import would add it again, which the import
+  of an array formula never does, so `=B1:B3+@C1:E1` reopened as `=B1:B3+C1:E1`
+  (`src/export/worksheets.rs`). Needs `to_excel_array_string` from the `ironcalc_base` patch.
+  Test: `an_intersection_in_a_dynamic_array_survives_save_and_load` in
+  `src/export/test/test_export.rs`.
 - `write_rows_xml` writes only the `<row>` elements a caller lists, with the shared formula
   encoding (`SharedFormula`) the caller chooses for each formula cell, so rows can be
   placed among rows copied from an existing part without clashing with its `si` numbers
@@ -521,11 +527,20 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   of several columns (or rows) spills it as in Excel instead of giving `#VALUE!`; return_array
   must still have as many rows (or columns) as lookup_array. A one-cell lookup_array returns a
   one-row return_array whole, as for a table with one row. A typed XLOOKUP is stored as a
-  dynamic formula only when its return_array is a range that can give more than one cell, so
-  a single-value one stays a plain formula, as Excel writes it (`src/functions/xlookup.rs`,
+  plain formula only when its return_array and if_not_found are sure to give one cell, as
+  Excel writes a single-value XLOOKUP; any shape the parser cannot see (a name, a table, a
+  function, a range whose ends mix `$`) makes it a dynamic formula, as for INDEX, and one in a
+  plain cell of a file gets the `@` legacy Excel reads it with (`src/functions/xlookup.rs`,
   `static_analysis_xlookup` in `src/expressions/parser/static_analysis.rs`). Applies on top of
   the lookup index patch, whose code it shares; its tests use `Cell::dynamic_range` from the
-  `CellStore` patch. Tests: `src/test/lookup_and_reference/test_fn_xlookup.rs`.
+  `CellStore` patch. Tests: `src/test/lookup_and_reference/test_fn_xlookup.rs`,
+  `xlookup_in_a_plain_cell_keeps_its_text` in
+  `src/expressions/parser/tests/test_implicit_intersection_export.rs`.
+- `to_excel_array_string` stringifies the formula of an array or dynamic array cell keeping
+  every `@` as `_xlfn.SINGLE`, since importing one adds no implicit intersection; the export
+  of `ironcalc` uses it (`src/expressions/parser/stringify.rs`). Stands on its own. Test:
+  `array_formulas_keep_every_intersection` in
+  `src/expressions/parser/tests/test_implicit_intersection_export.rs`.
 
 Zenkai-only, not for upstream:
 
