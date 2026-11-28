@@ -1,4 +1,6 @@
-use gpui_kit::base::{Disableable, Selectable, h_flex, v_flex};
+use std::rc::Rc;
+
+use gpui_kit::base::{Disableable, FocusableExt, Selectable, h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -9,7 +11,10 @@ use zenkai_i18n::t;
 use super::columns::Format;
 use super::controls::{DISABLED_OPACITY, checkbox_box, focus_ring, labelled};
 use super::words;
-use super::{CsvPreview, delimiter_label, fit};
+use super::{
+    CANCEL_STOP, CsvPreview, DATE_STOPS, DECIMAL_STOPS, OPEN_STOP, SEPARATOR_STOPS,
+    delimiter_label, fit,
+};
 use crate::actions::*;
 use crate::interface_scale::rem_px;
 
@@ -22,6 +27,17 @@ const DELIMITERS: [Delimiter; 4] = [
 const TITLE_HEIGHT: f32 = 28.0;
 const ROW_HEIGHT: f32 = 30.0;
 const FOOTER_HEIGHT: f32 = 34.0;
+// The section clips what is drawn past its edge, and a focus ring reaches 5px past a stop: the
+// section is that much larger on every side, and its content stays where it was.
+const RING_ROOM: f32 = 6.0;
+
+type Activation = Rc<dyn Fn(&mut CsvPreview, &mut Window, &mut Context<CsvPreview>)>;
+
+fn activation(
+    run: impl Fn(&mut CsvPreview, &mut Window, &mut Context<CsvPreview>) + 'static,
+) -> Activation {
+    Rc::new(run)
+}
 
 impl Render for CsvPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -29,14 +45,15 @@ impl Render for CsvPreview {
         let fitted = fit::fit(f32::from(window.viewport_size().height), scale);
         self.rows_changed(fitted.rows);
         self.section_scrolls = fitted.scrolls;
+        self.keep_focus(window, cx);
         self.follow_focus(window, cx);
         let table = self.render_table(window, cx).into_any_element();
-        let settings = self.render_settings(cx).into_any_element();
+        let settings = self.render_settings(window, cx).into_any_element();
         let keep_all = self.render_keep_all(window, cx).into_any_element();
         let note = self.render_note(window, cx).into_any_element();
         let panel = self.render_panel(window, cx).into_any_element();
         let title = self.render_title();
-        let footer = self.render_footer(cx);
+        let footer = self.render_footer(window, cx);
         let theme = cx.theme();
         let section = v_flex()
             .id("csv-section")
@@ -45,6 +62,10 @@ impl Render for CsvPreview {
             .flex_1()
             .min_h_0()
             .gap_3()
+            .mx(px(-RING_ROOM))
+            .my(px(-RING_ROOM))
+            .px(px(RING_ROOM))
+            .py(px(RING_ROOM))
             .child(self.block(0, settings))
             .child(self.block(1, keep_all))
             .child(self.block(2, note))
@@ -155,65 +176,103 @@ impl CsvPreview {
             .child(t!("csv.title", name = name))
     }
 
-    fn render_settings(&self, cx: &Context<Self>) -> impl IntoElement {
+    // A button of the dialog with the focus ring of the other stops, not the library's. The stop
+    // is a wrapper that keeps the focus and answers Enter and Space; the button answers clicks.
+    fn stop_button(
+        &self,
+        stop: usize,
+        button: Button,
+        enabled: bool,
+        activate: Activation,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let focused = enabled && self.button_stops[stop].is_focused(window);
+        let by_click = activate.clone();
+        div()
+            .id(("csv-button", stop))
+            .relative()
+            .flex_none()
+            .when(enabled, |wrapper| {
+                wrapper
+                    .track_focus(&self.button_stops[stop])
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if event.is_keyboard() {
+                            activate(this, window, cx);
+                        }
+                    }))
+            })
+            .child(
+                button
+                    .focus_ring(false)
+                    .tab_stop(false)
+                    .disabled(!enabled)
+                    .on_click(cx.listener(move |this, _, window, cx| by_click(this, window, cx))),
+            )
+            .when(focused, |wrapper| wrapper.child(focus_ring(cx.theme())))
+    }
+
+    fn render_settings(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let reading_open = !self.keep_all;
-        let choice = |id: (&'static str, usize),
+        let choice = |stop: usize,
                       label: &'static str,
                       selected: bool,
                       enabled: bool,
-                      on_click: Box<dyn Fn(&mut Self, &mut Context<Self>)>| {
+                      activate: Activation| {
             // The check mark keeps the choice readable without colour.
             let text = if selected {
                 format!("\u{2713} {label}")
             } else {
                 label.to_string()
             };
-            Button::new(id)
+            let button = Button::new(("csv-choice", stop))
                 .ghost()
                 .compact()
                 .label(text)
-                .selected(selected)
-                .disabled(!enabled)
-                .tab_stop(enabled)
-                .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+                .selected(selected);
+            self.stop_button(stop, button, enabled, activate, window, cx)
         };
-        let group = |name: &'static str, enabled: bool, buttons: Vec<Button>| {
+        let group = |name: &'static str, enabled: bool, buttons: Vec<Stateful<Div>>| {
             h_flex()
                 .key_context("CsvControl")
                 .gap_2()
                 .items_center()
-                .when(!enabled, |dimmed| dimmed.opacity(DISABLED_OPACITY))
-                .child(div().text_color(theme.muted_foreground).child(name))
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .when(!enabled, |dimmed| dimmed.opacity(DISABLED_OPACITY))
+                        .child(name),
+                )
                 .children(buttons)
         };
-        let separators: Vec<Button> = DELIMITERS
+        let separators: Vec<Stateful<Div>> = DELIMITERS
             .into_iter()
             .enumerate()
             .map(|(index, delimiter)| {
                 choice(
-                    ("csv-separator", index),
+                    SEPARATOR_STOPS + index,
                     delimiter_label(delimiter),
                     self.parsed.delimiter == delimiter,
                     true,
-                    Box::new(move |this, cx| this.choose_separator(delimiter, cx)),
+                    activation(move |this, _, cx| this.choose_separator(delimiter, cx)),
                 )
             })
             .collect();
-        let decimals: Vec<Button> = [(DecimalMark::Dot, "1.5"), (DecimalMark::Comma, "1,5")]
+        let decimals: Vec<Stateful<Div>> = [(DecimalMark::Dot, "1.5"), (DecimalMark::Comma, "1,5")]
             .into_iter()
             .enumerate()
             .map(|(index, (mark, label))| {
                 choice(
-                    ("csv-decimal", index),
+                    DECIMAL_STOPS + index,
                     label,
                     self.guess.decimal_mark == mark,
                     reading_open,
-                    Box::new(move |this, cx| this.choose_decimal_mark(mark, cx)),
+                    activation(move |this, _, cx| this.choose_decimal_mark(mark, cx)),
                 )
             })
             .collect();
-        let dates: Vec<Button> = [
+        let dates: Vec<Stateful<Div>> = [
             (DateOrder::DayFirst, t!("csv.date_day_first")),
             (DateOrder::MonthFirst, t!("csv.date_month_first")),
         ]
@@ -221,11 +280,11 @@ impl CsvPreview {
         .enumerate()
         .map(|(index, (order, label))| {
             choice(
-                ("csv-dates", index),
+                DATE_STOPS + index,
                 label,
                 self.guess.date_order == order,
                 reading_open,
-                Box::new(move |this, cx| this.choose_date_order(order, cx)),
+                activation(move |this, _, cx| this.choose_date_order(order, cx)),
             )
         })
         .collect();
@@ -299,13 +358,21 @@ impl CsvPreview {
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .line_height(rem_px(18.0))
                     .text_color(theme.muted_foreground)
                     .child(words::keep_all_hint(self.keep_all)),
             )
     }
 
-    fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_footer(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let cancel = Button::new("csv-cancel")
+            .label(t!("button.cancel"))
+            .h(rem_px(FOOTER_HEIGHT));
+        let open = Button::new("csv-import")
+            .primary()
+            .label(t!("csv.import"))
+            .h(rem_px(FOOTER_HEIGHT));
         h_flex()
             .h(rem_px(FOOTER_HEIGHT))
             .flex_none()
@@ -317,28 +384,26 @@ impl CsvPreview {
                     .min_w_0()
                     .truncate()
                     .text_size(rem_px(12.0))
+                    .line_height(rem_px(18.0))
                     .text_color(theme.muted_foreground)
                     .child(words::footer_hint(self.keep_all, self.has_columns())),
             )
-            .child(
-                div().key_context("CsvControl").child(
-                    Button::new("csv-cancel")
-                        .label(t!("button.cancel"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(CancelCsvImport), cx)
-                        }),
-                ),
-            )
-            .child(
-                div().key_context("CsvControl").child(
-                    Button::new("csv-import")
-                        .primary()
-                        .label(t!("csv.import"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ConfirmCsvImport), cx)
-                        }),
-                ),
-            )
+            .child(div().key_context("CsvControl").child(self.stop_button(
+                CANCEL_STOP,
+                cancel,
+                true,
+                activation(|_, window, cx| window.dispatch_action(Box::new(CancelCsvImport), cx)),
+                window,
+                cx,
+            )))
+            .child(div().key_context("CsvControl").child(self.stop_button(
+                OPEN_STOP,
+                open,
+                true,
+                activation(|_, window, cx| window.dispatch_action(Box::new(ConfirmCsvImport), cx)),
+                window,
+                cx,
+            )))
     }
 }
 

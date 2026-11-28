@@ -69,6 +69,12 @@ impl EventEmitter<PreviewEvent> for CsvPreview {}
 
 const SECTION_BLOCKS: usize = 5;
 const NOTE_STOPS: usize = 3;
+const SEPARATOR_STOPS: usize = 0;
+const DECIMAL_STOPS: usize = 4;
+const DATE_STOPS: usize = 6;
+const CANCEL_STOP: usize = 8;
+const OPEN_STOP: usize = 9;
+const BUTTON_STOPS: usize = 10;
 
 pub struct CsvPreview {
     path: PathBuf,
@@ -92,6 +98,7 @@ pub struct CsvPreview {
     radios: FocusHandle,
     keep_all_stop: FocusHandle,
     note_stops: [FocusHandle; NOTE_STOPS],
+    button_stops: [FocusHandle; BUTTON_STOPS],
     blocks: [FocusHandle; SECTION_BLOCKS],
     shown_block: Option<usize>,
     columns_scroll: VirtualListScrollHandle,
@@ -141,6 +148,7 @@ impl CsvPreview {
             radios: cx.focus_handle().tab_stop(true),
             keep_all_stop: cx.focus_handle().tab_stop(true),
             note_stops: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            button_stops: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             blocks: std::array::from_fn(|_| cx.focus_handle()),
             shown_block: None,
             columns_scroll,
@@ -170,7 +178,7 @@ impl CsvPreview {
     }
 
     pub fn take_import(&mut self) -> Import {
-        // A read of the file that comes back after this would put columns over rows it did not make.
+        // A read of the file that lands after this would put columns over rows it did not read.
         self.request += 1;
         let rows = std::mem::take(&mut self.parsed.rows);
         let parsed = ParsedCsv {
@@ -339,12 +347,36 @@ impl CsvPreview {
         cx.notify();
     }
 
-    // How many stops Tab visits in the dialog now, so that Shift+Tab can wrap round to the last.
-    fn tab_stops(&self) -> usize {
-        let notes = match words::note(&self.columns, &self.formats, self.keep_all) {
+    fn note_stops_shown(&self) -> usize {
+        match words::note(&self.columns, &self.formats, self.keep_all) {
             words::Note::Flagged { entries, more } => entries.len() + usize::from(more > 0),
             words::Note::Sentence(_) => 0,
-        };
+        }
+    }
+
+    // A choice can take away the stop that has focus (Keep everything as text closes the radios,
+    // a new reading of the file the entries of the note). Focus left on a stop that is no longer
+    // there takes every key of the dialog with it, so the dialog takes it back.
+    fn keep_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut gone: Vec<&FocusHandle> =
+            self.note_stops[self.note_stops_shown()..].iter().collect();
+        if !self.has_columns() {
+            gone.extend([&self.keep_all_stop, &self.strip]);
+        }
+        if !self.formats_are_open() {
+            gone.push(&self.radios);
+        }
+        if self.keep_all {
+            gone.extend(&self.button_stops[DECIMAL_STOPS..CANCEL_STOP]);
+        }
+        if gone.iter().any(|stop| stop.is_focused(window)) {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    // How many stops Tab visits in the dialog now, so that Shift+Tab can wrap round to the last.
+    fn tab_stops(&self) -> usize {
+        let notes = self.note_stops_shown();
         let separators = 4;
         let reading_choices = if self.keep_all { 0 } else { 4 };
         let checkbox = usize::from(self.has_columns());
