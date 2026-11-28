@@ -206,6 +206,35 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-h", Replace, CONTEXT),
         bind("ctrl-shift-p", TogglePalette, CONTEXT),
         bind("escape", CloseRename, Some("RenameBar")),
+        bind("left", TabColorLeft, Some("TabColorCard")),
+        bind("right", TabColorRight, Some("TabColorCard")),
+        bind("up", TabColorUp, Some("TabColorCard")),
+        bind("down", TabColorDown, Some("TabColorCard")),
+        bind("home", TabColorHome, Some("TabColorCard")),
+        bind("end", TabColorEnd, Some("TabColorCard")),
+        bind("enter", ApplyTabColor, Some("TabColorCard")),
+        bind("escape", CloseTabColor, Some("TabColorCard")),
+        bind("tab", FocusNextControl, Some("TabColorCard")),
+        bind("shift-tab", FocusPreviousControl, Some("TabColorCard")),
+        bind("up", UnhideMoveUp, Some("UnhideList")),
+        bind("down", UnhideMoveDown, Some("UnhideList")),
+        bind("shift-up", UnhideExtendUp, Some("UnhideList")),
+        bind("shift-down", UnhideExtendDown, Some("UnhideList")),
+        bind("ctrl-up", UnhideFocusUp, Some("UnhideList")),
+        bind("ctrl-down", UnhideFocusDown, Some("UnhideList")),
+        bind("space", UnhideToggleRow, Some("UnhideList")),
+        bind("ctrl-space", UnhideToggleRow, Some("UnhideList")),
+        bind("ctrl-a", UnhideSelectAll, Some("UnhideList")),
+        bind("home", UnhideFirstRow, Some("UnhideList")),
+        bind("end", UnhideLastRow, Some("UnhideList")),
+        bind(
+            "enter",
+            ConfirmUnhide,
+            Some("UnhideDialog && !UnhideButton"),
+        ),
+        bind("escape", CancelUnhide, Some("UnhideDialog")),
+        bind("tab", FocusNextControl, Some("UnhideDialog")),
+        bind("shift-tab", FocusPreviousControl, Some("UnhideDialog")),
         bind("ctrl-g", GoTo, CONTEXT),
         bind("enter", ConfirmCsvImport, Some("CsvPreview")),
         bind("escape", CancelCsvImport, Some("CsvPreview")),
@@ -551,5 +580,74 @@ mod tests {
         for (key, action) in cases {
             assert!(matches(key, action), "Ctrl+{key} does not reach {action}");
         }
+    }
+
+    #[test]
+    fn the_tab_commands_have_no_default_shortcut_and_their_dialogs_have_theirs() {
+        let names = |context: Option<&str>| -> Vec<&'static str> {
+            defaults()
+                .into_iter()
+                .filter(|binding| binding.context == context)
+                .map(|binding| binding.action.name())
+                .collect()
+        };
+        for command in [
+            <TabColor as Action>::name_for_type(),
+            <HideSheet as Action>::name_for_type(),
+            <UnhideSheet as Action>::name_for_type(),
+        ] {
+            assert!(
+                !defaults()
+                    .iter()
+                    .any(|binding| binding.action.name() == command),
+                "{command} has a default shortcut"
+            );
+        }
+        let card = names(Some("TabColorCard"));
+        for action in [
+            <TabColorLeft as Action>::name_for_type(),
+            <TabColorRight as Action>::name_for_type(),
+            <TabColorUp as Action>::name_for_type(),
+            <TabColorDown as Action>::name_for_type(),
+            <TabColorHome as Action>::name_for_type(),
+            <TabColorEnd as Action>::name_for_type(),
+            <ApplyTabColor as Action>::name_for_type(),
+            <CloseTabColor as Action>::name_for_type(),
+            <FocusNextControl as Action>::name_for_type(),
+            <FocusPreviousControl as Action>::name_for_type(),
+        ] {
+            assert!(card.contains(&action), "the card lacks {action}");
+        }
+        let list = names(Some("UnhideList"));
+        for action in [
+            <UnhideMoveUp as Action>::name_for_type(),
+            <UnhideMoveDown as Action>::name_for_type(),
+            <UnhideExtendUp as Action>::name_for_type(),
+            <UnhideExtendDown as Action>::name_for_type(),
+            <UnhideFocusUp as Action>::name_for_type(),
+            <UnhideFocusDown as Action>::name_for_type(),
+            <UnhideToggleRow as Action>::name_for_type(),
+            <UnhideSelectAll as Action>::name_for_type(),
+            <UnhideFirstRow as Action>::name_for_type(),
+            <UnhideLastRow as Action>::name_for_type(),
+        ] {
+            assert!(list.contains(&action), "the list lacks {action}");
+        }
+        let toggles = defaults()
+            .into_iter()
+            .filter(|binding| {
+                binding.context == Some("UnhideList")
+                    && binding.action.name() == <UnhideToggleRow as Action>::name_for_type()
+            })
+            .map(|binding| binding.chord.as_str().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(toggles, ["space", "ctrl-space"]);
+        let dialog = names(Some("UnhideDialog"));
+        assert!(dialog.contains(&<CancelUnhide as Action>::name_for_type()));
+        assert!(dialog.contains(&<FocusNextControl as Action>::name_for_type()));
+        assert!(
+            names(Some("UnhideDialog && !UnhideButton"))
+                .contains(&<ConfirmUnhide as Action>::name_for_type())
+        );
     }
 }

@@ -55,7 +55,8 @@ impl Workspace {
             root, cx;
             Open, NewWorkbook, NextDocument, PreviousDocument, ReopenClosedDocument,
             NextSheet, PreviousSheet, NewSheet, DuplicateSheet, DeleteSheet, RenameSheet,
-            MoveSheetLeft, MoveSheetRight, Find, Replace, GoTo, GenerateData, InsertChart,
+            MoveSheetLeft, MoveSheetRight, TabColor, HideSheet, UnhideSheet, Find, Replace, GoTo,
+            GenerateData, InsertChart,
             ToggleFormulas, ZoomIn, ZoomOut, ZoomReset, Undo, Redo, PasteValues,
             SortAscending, SortDescending, FreezeTopRow, FreezeFirstColumn, FreezePanes,
             InsertRows, DeleteRows, InsertColumns, DeleteColumns, InsertSelection,

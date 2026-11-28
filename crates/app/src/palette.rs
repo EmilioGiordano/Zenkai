@@ -173,6 +173,9 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.move_sheet_left"), MoveSheetLeft),
                 item(t!("palette.move_sheet_right"), MoveSheetRight),
                 item(t!("palette.duplicate_sheet"), DuplicateSheet),
+                item(t!("palette.tab_color"), TabColor),
+                item(t!("palette.hide_sheet"), HideSheet),
+                item(t!("palette.unhide_sheet"), UnhideSheet),
             ],
         ),
         group(
@@ -318,4 +321,64 @@ pub fn table() -> Vec<Group> {
             ],
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::Action;
+
+    use super::table;
+    use crate::actions::{
+        DeleteSheet, DuplicateSheet, HideSheet, RenameSheet, TabColor, UnhideSheet,
+    };
+
+    fn group_of(name: &str) -> Option<&'static str> {
+        table()
+            .into_iter()
+            .find(|group| {
+                group
+                    .entries
+                    .iter()
+                    .any(|entry| entry.action.name() == name)
+            })
+            .map(|group| group.label)
+    }
+
+    #[test]
+    fn the_tab_commands_are_listed_with_the_other_sheet_commands() {
+        let sheet_group = group_of(<RenameSheet as Action>::name_for_type());
+        assert!(sheet_group.is_some());
+        for name in [
+            <DeleteSheet as Action>::name_for_type(),
+            <DuplicateSheet as Action>::name_for_type(),
+            <TabColor as Action>::name_for_type(),
+            <HideSheet as Action>::name_for_type(),
+            <UnhideSheet as Action>::name_for_type(),
+        ] {
+            assert_eq!(group_of(name), sheet_group, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_tab_commands_are_labelled_as_the_board_names_them() {
+        let label_of = |name: &str| {
+            table()
+                .into_iter()
+                .flat_map(|group| group.entries)
+                .find(|entry| entry.action.name() == name)
+                .map(|entry| entry.label)
+        };
+        assert_eq!(
+            label_of(<TabColor as Action>::name_for_type()),
+            Some("Tab color…")
+        );
+        assert_eq!(
+            label_of(<HideSheet as Action>::name_for_type()),
+            Some("Hide sheet")
+        );
+        assert_eq!(
+            label_of(<UnhideSheet as Action>::name_for_type()),
+            Some("Unhide sheet…")
+        );
+    }
 }
