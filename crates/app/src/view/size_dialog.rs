@@ -11,6 +11,7 @@ use zenkai_types::{LineAxis, SheetId};
 use super::{Severity, Workspace, activates_button};
 use crate::actions::{ApplyLineSize, CloseLineSizeDialog, FocusNextControl, FocusPreviousControl};
 use crate::autofit;
+use crate::contrast::readable;
 use crate::dialog_focus;
 use crate::focus_ring::focus_ring;
 use crate::interface_scale::rem_px;
@@ -24,8 +25,9 @@ const SLOT_HEIGHT: f32 = 36.0;
 const SLOT_LINE_HEIGHT: f32 = 17.0;
 // The field, Cancel and OK.
 const TAB_STOPS: usize = 3;
-// The stock `danger` is 3.8:1 on a white surface; this is the darkest red that reads at 4.5:1.
-const LIGHT_ERROR_TEXT: u32 = 0xdc2626;
+// WCAG AA for the error text, and for its icon as a graphic.
+const ERROR_TEXT_CONTRAST: f32 = 4.5;
+const ERROR_ICON_CONTRAST: f32 = 3.0;
 
 pub(super) struct SizeDialog {
     lines: Lines,
@@ -50,7 +52,23 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.size_dialog.is_some() || self.format_dialog.is_some() || self.user_is_editing(cx) {
+        let open = self
+            .size_dialog
+            .as_ref()
+            .map(|dialog| (dialog.lines.axis, dialog.input.clone()));
+        match open {
+            // The command again: back to the field, as the text selected in it.
+            Some((open_axis, input)) if open_axis == axis => {
+                input.update(cx, |state, cx| {
+                    state.focus(window, cx);
+                    state.select_all(window, cx);
+                });
+                return;
+            }
+            Some(_) => self.close_size_dialog(window, cx),
+            None => {}
+        }
+        if self.format_dialog.is_some() || self.user_is_editing(cx) {
             return;
         }
         let Some(document) = self.documents.active() else {
@@ -195,18 +213,25 @@ impl Workspace {
             &text,
             dialog.refused,
         );
-        let error_text = if theme.is_dark() {
-            theme.danger
-        } else {
-            rgb(LIGHT_ERROR_TEXT).into()
-        };
+        let error_text = readable(
+            theme.danger,
+            theme.popover,
+            theme.foreground,
+            ERROR_TEXT_CONTRAST,
+        );
+        let error_icon = readable(
+            theme.danger,
+            theme.popover,
+            theme.foreground,
+            ERROR_ICON_CONTRAST,
+        );
         let (icon, icon_color, slot_color) = match slot {
             Slot::ZeroNote | Slot::HiddenNote => (
                 Some(IconName::EyeOff),
                 theme.muted_foreground,
                 theme.muted_foreground,
             ),
-            Slot::Refusal(_) => (Some(IconName::CircleX), theme.danger, error_text),
+            Slot::Refusal(_) => (Some(IconName::CircleX), error_icon, error_text),
             Slot::Hint | Slot::EveryLineHiddenNote => {
                 (None, theme.muted_foreground, theme.muted_foreground)
             }
@@ -225,6 +250,7 @@ impl Workspace {
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&dialog.input)
+                        .px_0()
                         .appearance(false)
                         .bordered(false)
                         .focus_bordered(false)
@@ -263,6 +289,9 @@ impl Workspace {
         let buttons = h_flex()
             .gap_2()
             .justify_end()
+            .mt(rem_px(2.0))
+            .py(rem_px(4.0))
+            .pr(rem_px(5.0))
             .child(dialog_button(
                 ("line-size-cancel", "line-size-cancel-button"),
                 t!("button.cancel"),

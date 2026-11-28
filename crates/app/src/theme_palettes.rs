@@ -345,38 +345,9 @@ pub(crate) fn apply(choice: ThemeChoice, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{DarkTheme, ThemeChoice, palette};
+    use crate::contrast::{ratio, readable};
     use gpui_kit::component::ThemeColor;
-    use gpui_kit::{Hsla, Rgba, rgb};
-
-    fn channel(value: f32) -> f32 {
-        if value <= 0.03928 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    }
-
-    fn luminance(color: Rgba) -> f32 {
-        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
-    }
-
-    fn over(foreground: Hsla, background: Hsla) -> Rgba {
-        let fg = foreground.to_rgb();
-        let bg = background.to_rgb();
-        let mix = |f: f32, b: f32| f * fg.a + b * (1.0 - fg.a);
-        Rgba {
-            r: mix(fg.r, bg.r),
-            g: mix(fg.g, bg.g),
-            b: mix(fg.b, bg.b),
-            a: 1.0,
-        }
-    }
-
-    fn ratio(text: Hsla, background: Hsla) -> f32 {
-        let a = luminance(over(text, background)) + 0.05;
-        let b = luminance(background.to_rgb()) + 0.05;
-        a.max(b) / a.min(b)
-    }
+    use gpui_kit::{Hsla, rgb};
 
     fn text_pairs(choice: ThemeChoice) -> [(Hsla, Hsla); 2] {
         let hex = |value: u32| -> Hsla { rgb(value).into() };
@@ -410,5 +381,41 @@ mod tests {
                 assert!(value >= 4.5, "{choice:?}: contrast {value:.2}");
             }
         }
+    }
+
+    // The popover, the text on it and the red the dialogs draw errors in.
+    fn dialog_colors(choice: ThemeChoice) -> (Hsla, Hsla, Hsla) {
+        let hex = |value: u32| -> Hsla { rgb(value).into() };
+        match palette(choice) {
+            Some(p) => (hex(p.panel), hex(p.foreground), hex(p.danger)),
+            None if choice == ThemeChoice::Dark(DarkTheme::HighContrast) => {
+                (hex(0x000000), hex(0xFFFFFF), hex(0xFF6B6B))
+            }
+            None => {
+                let colors = if choice.is_dark() {
+                    ThemeColor::dark()
+                } else {
+                    ThemeColor::light()
+                };
+                (colors.popover, colors.foreground, colors.danger)
+            }
+        }
+    }
+
+    #[test]
+    fn an_error_reads_at_4_5_to_1_and_its_icon_at_3_to_1_on_the_dialog_in_every_theme() {
+        for choice in ThemeChoice::ALL {
+            let (popover, foreground, danger) = dialog_colors(choice);
+            let text = readable(danger, popover, foreground, 4.5);
+            let icon = readable(danger, popover, foreground, 3.0);
+            assert!(ratio(text, popover) >= 4.5, "{choice:?}: text");
+            assert!(ratio(icon, popover) >= 3.0, "{choice:?}: icon");
+        }
+    }
+
+    #[test]
+    fn a_red_that_already_reads_is_the_themes_own() {
+        let (popover, foreground, danger) = dialog_colors(ThemeChoice::Dark(DarkTheme::ZenkaiDark));
+        assert_eq!(readable(danger, popover, foreground, 4.5), danger);
     }
 }

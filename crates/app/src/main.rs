@@ -17,6 +17,7 @@ mod chat;
 mod chat_layout;
 mod clipboard;
 mod close_prompt;
+mod contrast;
 mod csv_export_size;
 mod csv_io;
 mod csv_options;
