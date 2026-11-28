@@ -191,14 +191,13 @@ fn runs(rows: impl IntoIterator<Item = i32>) -> Vec<(i32, i32)> {
 }
 
 impl Workbook {
-    pub(crate) fn sheet_filter(&self, sheet: SheetId) -> Result<Option<AutoFilter>, EngineError> {
+    fn sheet_filter(&self, sheet: SheetId) -> Result<Option<&AutoFilter>, EngineError> {
         self.model
             .get_auto_filter(sheet.0)
-            .map(Option::<&AutoFilter>::cloned)
             .map_err(|_| EngineError::UnknownSheet(sheet))
     }
 
-    fn existing_filter(&self, sheet: SheetId) -> Result<AutoFilter, EngineError> {
+    fn existing_filter(&self, sheet: SheetId) -> Result<&AutoFilter, EngineError> {
         self.sheet_filter(sheet)?
             .ok_or_else(|| rejected("the sheet has no filter"))
     }
@@ -362,7 +361,7 @@ impl Workbook {
         col: ColIdx,
         shown: Option<ShownValues>,
     ) -> Result<(), EngineError> {
-        let mut filter = self.existing_filter(sheet)?;
+        let mut filter = self.existing_filter(sheet)?.clone();
         let offset = Workbook::column_offset(&filter, col)?;
         let criteria = match shown {
             Some(shown) => FilterCriteria::Values {
@@ -391,7 +390,7 @@ impl Workbook {
 
     // Excel's Clear: every criterion goes, the buttons stay.
     pub(crate) fn clear_criteria(&mut self, sheet: SheetId) -> Result<(), EngineError> {
-        let mut filter = self.existing_filter(sheet)?;
+        let mut filter = self.existing_filter(sheet)?.clone();
         for column in &mut filter.columns {
             column.criteria = FilterCriteria::None;
         }
@@ -410,7 +409,7 @@ impl Workbook {
         search: &str,
     ) -> Result<FilterList, EngineError> {
         let filter = self.existing_filter(sheet)?;
-        let offset = Workbook::column_offset(&filter, col)?;
+        let offset = Workbook::column_offset(filter, col)?;
         let criteria = filter
             .columns
             .iter()
@@ -423,7 +422,7 @@ impl Workbook {
             });
         }
         let hidden = hidden_rows(self.model.get_model(), sheet)?;
-        let others = RowCriteria::of(&filter, Some(offset));
+        let others = RowCriteria::of(filter, Some(offset));
         let search = search.to_lowercase();
         let column = filter.first_column + offset;
         let mut items: BTreeMap<ItemOrder, (String, u32)> = BTreeMap::new();
@@ -502,7 +501,7 @@ impl Workbook {
         col: ColIdx,
         descending: bool,
     ) -> Result<(), EngineError> {
-        let filter = self.existing_filter(sheet)?;
+        let filter = self.existing_filter(sheet)?.clone();
         Workbook::column_offset(&filter, col)?;
         let hidden = hidden_rows(self.model.get_model(), sheet)?;
         let visible: Vec<i32> = filter
