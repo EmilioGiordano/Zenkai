@@ -42,6 +42,7 @@ pub use file::{
     write_atomic,
 };
 pub use hibernation::{Kept, MAX_DUMP_BYTES};
+pub use ironcalc::base::implemented_function_names as function_names;
 pub use model::FormatEdits;
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};

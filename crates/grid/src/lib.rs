@@ -13,6 +13,7 @@ mod paint_failure;
 mod scrollbar;
 
 pub use actions::*;
+pub use autocomplete::function_names as autocomplete_function_names;
 pub use grid::{
     Direction, EditMode, Editor, Grid, GridCell, GridEvent, MAX_TYPED_PREVIEW_CELLS, Selection,
     SheetView, ViewState, step, typed_preview,
