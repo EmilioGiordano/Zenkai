@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::Workbook as Source;
 use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
-use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
+use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 const SHEET: SheetId = SheetId(0);
 
@@ -178,4 +178,19 @@ fn a_file_default_without_custom_height_is_the_applications() {
     let opened = open_xlsx(&path).unwrap().workbook;
     assert_eq!(opened.sizes(SHEET).default_row_height, None);
     assert_eq!(opened.sizes(SHEET).default_column_width, None);
+}
+
+#[test]
+fn rows_with_a_stored_automatic_height_take_the_new_default_and_give_it_back() {
+    let mut book = Workbook::new_empty().unwrap();
+    let row = Range::parse_a1("A3:A3").unwrap();
+    book.set_rows_hidden(SHEET, row, true).unwrap();
+    book.set_rows_hidden(SHEET, row, false).unwrap();
+    assert!(book.sizes(SHEET).rows.is_empty());
+    book.as_one_undo_step(|book| book.set_default_row_height(SHEET, 27.0))
+        .unwrap();
+    assert_eq!(book.sizes(SHEET).rows, [(RowIdx::clamped(2), 27.0)]);
+    book.undo().unwrap();
+    assert!(book.sizes(SHEET).rows.is_empty());
+    assert_eq!(book.sizes(SHEET).default_row_height, None);
 }

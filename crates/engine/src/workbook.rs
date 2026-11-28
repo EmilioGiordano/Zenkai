@@ -155,7 +155,9 @@ pub trait Engine: Send {
         pixels: f32,
     ) -> Result<(), EngineError>;
     // The size of every column or row of the sheet that has no entry of its own, as Excel
-    // sets it for a whole-sheet selection. The pixels must be above zero.
+    // sets it for a whole-sheet selection. The pixels must be above zero. Rows that carry a
+    // stored automatic height take it too, as Excel's rows do; rows and columns with a size
+    // of their own are the caller's to set.
     fn set_default_column_width(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError>;
     fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError>;
     fn frozen(&self, sheet: SheetId) -> (u32, u16);
@@ -1874,7 +1876,25 @@ impl Engine for Workbook {
 
     fn set_default_row_height(&mut self, sheet: SheetId, pixels: f32) -> Result<(), EngineError> {
         let points = (visible_pixels(pixels)? / PIXELS_PER_POINT).clamp(0.0, 409.5);
-        self.change_default_sizes(sheet, |sizes| sizes.row_height = Some(points))
+        let automatic: Vec<i32> = self
+            .model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .map_err(rejected)?
+            .rows
+            .iter()
+            .filter(|row| !row.custom_height && !row.hidden)
+            .map(|row| row.r)
+            .collect();
+        self.change_default_sizes(sheet, |sizes| sizes.row_height = Some(points))?;
+        self.model
+            .edit_keeping_cells(|model| {
+                automatic.iter().try_for_each(|row| {
+                    model.set_rows_height(sheet.0, *row, *row, points * ROW_HEIGHT_FACTOR)
+                })
+            })
+            .map_err(rejected)
     }
 
     fn frozen(&self, sheet: SheetId) -> (u32, u16) {
