@@ -9,6 +9,8 @@ mod agent_routing;
 mod agent_settings;
 mod assets;
 mod auto_sum;
+#[cfg(test)]
+mod autocomplete_functions;
 mod autosave;
 mod chart;
 mod chart_panel;
