@@ -248,6 +248,41 @@ impl Workbook {
         self.write_filter(sheet, Some(filter), &changes)
     }
 
+    // The rows of `range` an edit over it skips: in a filter that hides rows, as in Excel,
+    // every hidden row of its data. 0-based.
+    pub(crate) fn skipped_rows(
+        &self,
+        sheet: SheetId,
+        range: Range,
+    ) -> Result<HashSet<u32>, EngineError> {
+        let Some(filter) = self.sheet_filter(sheet)? else {
+            return Ok(HashSet::new());
+        };
+        if filter.filtered_rows.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let hidden = hidden_rows(self.model.get_model(), sheet)?;
+        let first = (*filter.data_rows().start()).max(row_i32(range.start.row));
+        let last = (*filter.data_rows().end()).min(row_i32(range.end.row));
+        Ok((first..=last)
+            .filter(|row| hidden.contains(row))
+            .filter_map(|row| u32::try_from(row - 1).ok())
+            .collect())
+    }
+
+    // Excel refuses to paste several rows over rows a filter hides: they would land in the
+    // hidden rows too.
+    pub(crate) fn check_paste_rows(
+        &self,
+        sheet: SheetId,
+        target: Range,
+    ) -> Result<(), EngineError> {
+        if target.rows() > 1 && !self.skipped_rows(sheet, target)?.is_empty() {
+            return Err(EngineError::FilteredPaste);
+        }
+        Ok(())
+    }
+
     pub(crate) fn filter_view(&self, sheet: SheetId) -> Option<FilterView> {
         let filter = self.sheet_filter(sheet).ok()??;
         let hidden = hidden_rows(self.model.get_model(), sheet).ok()?;
@@ -528,4 +563,49 @@ impl Workbook {
                 .map_err(model_error)
         })
     }
+}
+
+// Each fill line cut around `skipped` rows (0-based), so a fill touches only the rows
+// left.
+pub(crate) fn lines_around(
+    lines: Vec<(Option<CellPos>, Range)>,
+    skipped: &HashSet<u32>,
+) -> Vec<(Option<CellPos>, Range)> {
+    if skipped.is_empty() {
+        return lines;
+    }
+    lines
+        .into_iter()
+        .flat_map(|(source, line)| {
+            let rows = (line.start.row.get()..=line.end.row.get())
+                .filter(|row| !skipped.contains(row))
+                .filter_map(|row| i32::try_from(row).ok());
+            runs(rows).into_iter().map(move |(first, last)| {
+                let row = |index: i32| RowIdx::clamped(i64::from(index));
+                (
+                    source,
+                    Range::new(
+                        CellPos::new(row(first), line.start.col),
+                        CellPos::new(row(last), line.end.col),
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+// The rows of `range` outside `skipped` (0-based), as runs of first and last.
+pub(crate) fn rows_around(range: Range, skipped: &HashSet<u32>) -> Vec<(RowIdx, RowIdx)> {
+    let rows = (range.start.row.get()..=range.end.row.get())
+        .filter(|row| !skipped.contains(row))
+        .filter_map(|row| i32::try_from(row).ok());
+    runs(rows)
+        .into_iter()
+        .map(|(first, last)| {
+            (
+                RowIdx::clamped(i64::from(first)),
+                RowIdx::clamped(i64::from(last)),
+            )
+        })
+        .collect()
 }

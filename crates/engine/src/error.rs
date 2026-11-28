@@ -32,6 +32,8 @@ pub enum EngineError {
     BadDump(String),
     #[error("{0}")]
     Rejected(String),
+    #[error("several rows cannot be pasted into a filtered range")]
+    FilteredPaste,
     #[error("the operation was cancelled; nothing was written")]
     Cancelled,
 }

@@ -1233,7 +1233,22 @@ impl Engine for Workbook {
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
-        self.set_inputs(sheet, range.start, &rows)
+        let skipped = self.skipped_rows(sheet, range)?;
+        if skipped.is_empty() {
+            return self.set_inputs(sheet, range.start, &rows);
+        }
+        let runs = crate::auto_filter::rows_around(range, &skipped);
+        self.as_one_undo_step(|book| {
+            runs.iter().try_for_each(|(first, last)| {
+                let offset = (first.get() - range.start.row.get()) as usize;
+                let count = (last.get() - first.get()) as usize + 1;
+                book.set_inputs(
+                    sheet,
+                    CellPos::new(*first, range.start.col),
+                    &rows[offset..offset + count],
+                )
+            })
+        })
     }
 
     // The fill handle: the cells of `target` past `source` (below it or to its right)
@@ -1427,19 +1442,18 @@ impl Engine for Workbook {
         let source_sheet: u32 = serde_json::from_value(field("sheet")?).map_err(parse)?;
         let source_range: (i32, i32, i32, i32) =
             serde_json::from_value(field("range")?).map_err(parse)?;
-        select(&mut self.model, sheet, Range::single(at))?;
         let (first_row, first_col, last_row, last_col) = source_range;
         let (height, width) = (
             i64::from(last_row) - i64::from(first_row),
             i64::from(last_col) - i64::from(first_col),
         );
-        self.log_content(
-            sheet,
-            Range::new(
-                at,
-                CellPos::new(at.row.offset(height), at.col.offset(width)),
-            ),
+        let target = Range::new(
+            at,
+            CellPos::new(at.row.offset(height), at.col.offset(width)),
         );
+        self.check_paste_rows(sheet, target)?;
+        select(&mut self.model, sheet, Range::single(at))?;
+        self.log_content(sheet, target);
         if cut {
             let corner = |row: i32, col: i32| {
                 CellPos::new(
@@ -1469,7 +1483,7 @@ impl Engine for Workbook {
 
     // Ctrl+D / Ctrl+R: the first row (or column) of the target is extended over the rest
     // with references shifted and its cells' formats copied whole, as in Excel; a single
-    // row (or column) extends the one above (or left).
+    // row (or column) extends the one above (or left). Rows a filter hides are skipped.
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
         let source_line = if down {
             if target.rows() == 1 {
@@ -1528,6 +1542,7 @@ impl Engine for Workbook {
                 })
                 .collect()
         };
+        let lines = crate::auto_filter::lines_around(lines, &self.skipped_rows(sheet, rest)?);
         let style_sources: Vec<(CellPos, Range)> = lines
             .iter()
             .filter_map(|(source, line)| source.map(|source| (source, *line)))
@@ -1609,10 +1624,13 @@ impl Engine for Workbook {
     // IronCalc visits every cell of an area it clears, so only the cells holding contents
     // are cleared, as rectangles of them: the work and the undo record follow the contents,
     // never the selection (a whole sheet has 17 billion cells), and gaps get no empty cells
-    // that would grow the used area. All rectangles go in one call, so one undo step.
+    // that would grow the used area. All rectangles go in one call, so one undo step. As
+    // in Excel, rows a filter hides keep their contents.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
         self.log_content(sheet, range);
-        let cells = self.content_cells_in(sheet, range)?;
+        let skipped = self.skipped_rows(sheet, range)?;
+        let mut cells = self.content_cells_in(sheet, range)?;
+        cells.retain(|cell| !skipped.contains(&cell.row.get()));
         if cells.is_empty() {
             return Ok(());
         }
