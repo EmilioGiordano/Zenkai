@@ -271,8 +271,23 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
     .map_err(other)
 }
 
-// `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
-// and its own <extLst> after it.
+// IronCalc writes the sheet's <autoFilter> before its other elements. Its texts are
+// escaped and a rule it keeps never holds another <autoFilter>, so the first end tag
+// closes it.
+fn filter_length(elements: &str) -> usize {
+    const END: &str = "</autoFilter>";
+    if !elements.starts_with("<autoFilter") {
+        return 0;
+    }
+    let open_end = elements.find('>').map_or(elements.len(), |at| at + 1);
+    if elements[..open_end].ends_with("/>") {
+        return open_end;
+    }
+    elements.find(END).map_or(open_end, |at| at + END.len())
+}
+
+// `tail` starts with </sheetData>; IronCalc writes <autoFilter>, <mergeCells>,
+// <conditionalFormatting> and its own <extLst> after it.
 fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io::Result<()> {
     let rest = tail
         .strip_prefix(SHEET_DATA_END)
@@ -282,8 +297,11 @@ fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io:
         .or_else(|| rest.rfind("</worksheet>"))
         .ok_or_else(|| other("the written sheet is not closed"))?;
     let (ironcalc_elements, closing) = rest.split_at(at);
+    let (filter, ironcalc_elements) = ironcalc_elements.split_at(filter_length(ironcalc_elements));
     out.write_all(SHEET_DATA_END.as_bytes())?;
     settings.elements.write_at(out, Place::AfterCellData)?;
+    out.write_all(filter.as_bytes())?;
+    settings.elements.write_at(out, Place::AfterFilter)?;
     out.write_all(ironcalc_elements.as_bytes())?;
     settings.write_trailing_elements(out)?;
     out.write_all(closing.as_bytes())
@@ -424,7 +442,7 @@ mod tests {
         let source = concat!(
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" "#,
             r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
-            r#"<sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/>"#,
+            r#"<sheetData/><sheetProtection sheet="1"/><sortState ref="A2:B2"/>"#,
             r#"<hyperlinks><hyperlink ref="A1" r:id="rId2"/></hyperlinks><pageMargins left="0.7" "#,
             r#"right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><rowBreaks "#,
             r#"count="1" manualBreakCount="1"><brk id="5" max="16383" man="1"/></rowBreaks>"#,
@@ -434,13 +452,14 @@ mod tests {
         let settings = crate::sheet_settings::read(source, &mut budget);
         let xml = concat!(
             "<worksheet><sheetViews><sheetView workbookViewId=\"0\"></sheetView></sheetViews>",
-            "<sheetData><row r=\"1\"/></sheetData><mergeCells/>",
+            "<sheetData><row r=\"1\"/></sheetData><autoFilter ref=\"A1:B2\"/><mergeCells/>",
             "<conditionalFormatting/><extLst/></worksheet>"
         );
         let order = [
             "</sheetData>",
             "<sheetProtection",
             "<autoFilter",
+            "<sortState",
             "<mergeCells",
             "<conditionalFormatting",
             "<hyperlinks",
@@ -456,6 +475,19 @@ mod tests {
             assert!(positions.iter().all(Option::is_some), "{written}");
             assert!(positions.is_sorted(), "{written}");
         }
+    }
+
+    #[test]
+    fn the_filter_ironcalc_writes_ends_at_its_first_end_tag() {
+        let closed = r#"<autoFilter ref="A1:B2"/>"#;
+        let full = r#"<autoFilter ref="A1:B2"><filterColumn colId="0"/></autoFilter>"#;
+        for filter in [closed, full] {
+            assert_eq!(
+                super::filter_length(&format!("{filter}<mergeCells/>")),
+                filter.len()
+            );
+        }
+        assert_eq!(super::filter_length("<mergeCells/>"), 0);
     }
 
     #[test]

@@ -2289,7 +2289,12 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
     }
 }
 
-fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
+// The streaming reader fills the rows after IronCalc read the sheet without them, so the
+// rows a file's filter hides are counted here, for both readers alike.
+fn engine_model(mut book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
+    for sheet in &mut book.worksheets {
+        sheet.mark_filtered_rows();
+    }
     Model::from_workbook(book, LANGUAGE).map_err(model_error)
 }
 
