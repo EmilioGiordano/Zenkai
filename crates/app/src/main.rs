@@ -9,6 +9,7 @@ mod agent_routing;
 mod agent_settings;
 mod assets;
 mod auto_sum;
+mod autofit;
 mod autosave;
 mod chart;
 mod chart_panel;
